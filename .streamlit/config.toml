@@ -2,6 +2,11 @@
 [theme]
 base = "light"
 primaryColor = "#2563EB"
+font = "sans serif"
 
 [browser]
 gatherUsageStats = false
+
+[runner]
+# 输入未变化时跳过完整重跑，显著加快翻页/交互响应
+fastReruns = true

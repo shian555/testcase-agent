@@ -14,6 +14,15 @@ from styles import RESULT_COLORS, page_header, pill, result_styler
 _RESULTS = ["未执行", "通过", "失败", "阻塞", "跳过"]
 
 
+@st.cache_data(show_spinner=False)
+def _export_run_excel(version: int, run_id: int) -> bytes:
+    """执行报表 Excel：version 为缓存盐，数据未变时跳过重建（拖慢每次重渲染的元凶）。"""
+    run = store.get_run(run_id)
+    if run is None:
+        return b""
+    return run_report_workbook(run, store.run_cases(run_id))
+
+
 def render() -> None:
     page_header("测试执行", "从用例库圈选用例创建测试单，逐条记录执行结果")
     runs = store.list_runs()
@@ -138,7 +147,7 @@ def _run_panel(run: dict) -> None:
         st.rerun()
 
     c3.download_button("⬇️ 导出执行报表（Excel）", use_container_width=True,
-                       data=run_report_workbook(run, rows),
+                       data=_export_run_excel(store.version(), rid),
                        file_name=f"RUN-{rid:04d}_执行报表.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 

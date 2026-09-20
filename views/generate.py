@@ -23,6 +23,13 @@ def _get_agents(mode: str):
     return LLMAnalyzerAgent(), LLMGeneratorAgent(), LLMReviewerAgent()
 
 
+@st.cache_data(show_spinner=False)
+def _export_generation_excel(n_points: int, n_cases: int, score: int, case_ids: tuple) -> bytes:
+    """生成报告 Excel：以批次规模 + 用例 ID 序列为缓存盐，翻页不再重复构建。"""
+    return generation_workbook(st.session_state.gen_points, st.session_state.gen_cases,
+                               st.session_state.gen_review)
+
+
 def render() -> None:
     page_header("用例生成", "粘贴 PRD，三 Agent 流水线产出测试点与用例，人工勾选采纳后沉淀入用例库")
 
@@ -133,7 +140,9 @@ def _render_results() -> None:
                            file_name="report.md", mime="text/markdown",
                            use_container_width=True)
         d3.download_button("下载生成报告.xlsx（格式化）",
-                           data=generation_workbook(points, cases, review),
+                           data=_export_generation_excel(len(points), len(cases),
+                                                         review.score,
+                                                         tuple(c.id for c in cases)),
                            file_name="用例生成报告.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                            use_container_width=True)

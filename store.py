@@ -66,7 +66,22 @@ CREATE TABLE IF NOT EXISTS run_results (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (run_id, case_id)
 );
+CREATE TABLE IF NOT EXISTS defects (
+    id             TEXT PRIMARY KEY,         -- BUG0001 起，全局唯一不复用
+    title          TEXT NOT NULL,
+    module         TEXT DEFAULT '',
+    severity       TEXT NOT NULL DEFAULT '一般' CHECK (severity IN ('严重','一般','轻微')),
+    status         TEXT NOT NULL DEFAULT '打开' CHECK (status IN ('打开','修复中','已解决','已关闭')),
+    description    TEXT DEFAULT '',
+    source_case_id TEXT DEFAULT '',          -- 来源失败用例（缺陷 ↔ 用例双向追溯）
+    run_id         INTEGER,                  -- 发现于哪个测试单
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_defects_status ON defects(status);
 INSERT OR IGNORE INTO counters(name, value) VALUES ('case_id', 0);
+INSERT OR IGNORE INTO counters(name, value) VALUES ('defect_id', 0);
+INSERT OR IGNORE INTO counters(name, value) VALUES ('data_version', 0);
 """
 
 
@@ -113,6 +128,18 @@ def _db():
         conn.close()
 
 
+def _bump(conn) -> None:
+    """任一写操作自增数据版本号：视图层用 version() 作为导出缓存的失效盐。"""
+    conn.execute("UPDATE counters SET value=value+1 WHERE name='data_version'")
+
+
+def version() -> int:
+    """当前数据版本号：任何写操作都会使其 +1（导出缓存的 key 盐）。"""
+    with _db() as conn:
+        row = conn.execute("SELECT value FROM counters WHERE name='data_version'").fetchone()
+        return int(row["value"])
+
+
 # ---------------- 用例 ----------------
 
 def _norm_priority(p) -> str:
@@ -146,6 +173,7 @@ def add_case(*, module: str, title: str, priority: str, method: str,
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (cid, module, title, precondition, steps, expected, _norm_priority(priority),
              method, testpoint_id, batch_id, source, status, tags, review_score, now, now))
+        _bump(conn)
     return cid
 
 
@@ -165,6 +193,7 @@ def add_cases(items: list[dict], *, source: str, batch_id: str = "") -> list[str
                  it.get("method", ""), it.get("testpoint_id", ""), batch_id, source,
                  "active", it.get("tags", ""), it.get("review_score"), now, now))
             ids.append(cid)
+        _bump(conn)
     return ids
 
 
@@ -198,6 +227,7 @@ def adopt_batch(prd_text: str, mode: str, score: int | None, items: list[dict], 
                  "active", it.get("tags", ""), score, now, now))
             ids.append(cid)
         conn.execute("UPDATE gen_batches SET case_count=? WHERE id=?", (len(ids), batch_id))
+        _bump(conn)
     return batch_id, ids
 
 
@@ -251,6 +281,7 @@ def update_case(case_id: str, **fields) -> None:
     params = list(cols.values()) + [_now(), case_id]
     with _db() as conn:
         conn.execute(f"UPDATE cases SET {sets}, updated_at=? WHERE id=?", params)
+        _bump(conn)
 
 
 def set_case_status(case_ids: list[str], status: str) -> None:
@@ -258,12 +289,14 @@ def set_case_status(case_ids: list[str], status: str) -> None:
         conn.executemany(
             "UPDATE cases SET status=?, updated_at=? WHERE id=?",
             [(status, _now(), cid) for cid in case_ids])
+        _bump(conn)
 
 
 def delete_cases(case_ids: list[str]) -> None:
     """物理删除（run_results 由外键级联清理）。"""
     with _db() as conn:
         conn.executemany("DELETE FROM cases WHERE id=?", [(cid,) for cid in case_ids])
+        _bump(conn)
 
 
 # ---------------- 测试单 / 执行结果 ----------------
@@ -281,6 +314,7 @@ def create_run(*, name: str, env: str = "测试环境", note: str = "",
         conn.executemany(
             "INSERT INTO run_results(run_id, case_id, result, updated_at) VALUES (?,?,?,?)",
             [(run_id, cid, "未执行", now) for cid in case_ids])
+        _bump(conn)
     return run_id
 
 
@@ -335,6 +369,7 @@ def set_result(run_id: int, case_id: str, result: str, note: str = "") -> None:
             " ON CONFLICT(run_id, case_id) DO UPDATE SET result=excluded.result,"
             " note=excluded.note, updated_at=excluded.updated_at",
             (run_id, case_id, result, note, _now()))
+        _bump(conn)
 
 
 def finish_run(run_id: int) -> None:
@@ -342,16 +377,114 @@ def finish_run(run_id: int) -> None:
         conn.execute(
             "UPDATE test_runs SET status='done', finished_at=? WHERE id=?",
             (_now(), run_id))
+        _bump(conn)
 
 
 def delete_run(run_id: int) -> None:
     with _db() as conn:
         conn.execute("DELETE FROM test_runs WHERE id=?", (run_id,))
+        _bump(conn)
 
 
 def run_stats(run_id: int) -> dict:
     return get_run(run_id) or {"total": 0, "passed": 0, "failed": 0, "blocked": 0,
                                "skipped": 0, "pending": 0, "executed": 0, "pass_rate": 0.0}
+
+
+# ---------------- 缺陷 ----------------
+
+_SEVERITIES = ("严重", "一般", "轻微")
+_DEFECT_STATUSES = ("打开", "修复中", "已解决", "已关闭")
+
+
+def _next_defect_id(conn) -> str:
+    row = conn.execute("SELECT value FROM counters WHERE name='defect_id'").fetchone()
+    value = int(row["value"]) + 1
+    conn.execute("UPDATE counters SET value=? WHERE name='defect_id'", (value,))
+    return f"BUG{value:04d}"
+
+
+def create_defect(*, title: str, module: str = "", severity: str = "一般",
+                  description: str = "", source_case_id: str = "",
+                  run_id: int | None = None) -> str:
+    """登记缺陷；来源用例/测试单可选，形成 缺陷 ↔ 用例 追溯。"""
+    now = _now()
+    if severity not in _SEVERITIES:
+        severity = "一般"
+    with _db() as conn:
+        did = _next_defect_id(conn)
+        conn.execute(
+            "INSERT INTO defects(id, title, module, severity, status, description,"
+            " source_case_id, run_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (did, title, module, severity, "打开", description, source_case_id,
+             run_id, now, now))
+        _bump(conn)
+    return did
+
+
+def list_defects(*, keyword: str = "", status: str | None = None,
+                 severity: str | None = None, module: str = "") -> list[dict]:
+    """按条件查询缺陷，id 倒序。status/severity 为 None 时不过滤。"""
+    sql = "SELECT * FROM defects WHERE 1=1"
+    params: list = []
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    if severity:
+        sql += " AND severity=?"
+        params.append(severity)
+    if module:
+        sql += " AND module=?"
+        params.append(module)
+    if keyword:
+        sql += " AND (title LIKE ? OR module LIKE ? OR description LIKE ? OR source_case_id LIKE ?)"
+        params += [f"%{keyword}%"] * 4
+    sql += " ORDER BY id DESC"
+    with _db() as conn:
+        return [dict(r) for r in conn.execute(sql, params)]
+
+
+def get_defect(defect_id: str) -> dict | None:
+    with _db() as conn:
+        row = conn.execute("SELECT * FROM defects WHERE id=?", (defect_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_defect(defect_id: str, *, status: str | None = None, severity: str | None = None,
+                  title: str | None = None, description: str | None = None) -> None:
+    """白名单字段更新（状态流转 / 信息修正）。"""
+    cols: dict = {}
+    if status and status in _DEFECT_STATUSES:
+        cols["status"] = status
+    if severity and severity in _SEVERITIES:
+        cols["severity"] = severity
+    if title:
+        cols["title"] = title
+    if description is not None:
+        cols["description"] = description
+    if not cols:
+        return
+    sets = ", ".join(f"{k}=?" for k in cols)
+    with _db() as conn:
+        conn.execute(f"UPDATE defects SET {sets}, updated_at=? WHERE id=?",
+                     list(cols.values()) + [_now(), defect_id])
+        _bump(conn)
+
+
+def delete_defects(defect_ids: list[str]) -> None:
+    with _db() as conn:
+        conn.executemany("DELETE FROM defects WHERE id=?", [(d,) for d in defect_ids])
+        _bump(conn)
+
+
+def defect_stats() -> dict:
+    """各状态缺陷数（看板 KPI 与缺陷页共用）。"""
+    with _db() as conn:
+        rows = conn.execute("SELECT status, COUNT(*) c FROM defects GROUP BY status").fetchall()
+    by = {r["status"]: r["c"] for r in rows}
+    return {"total": sum(by.values()),
+            "打开": by.get("打开", 0), "修复中": by.get("修复中", 0),
+            "已解决": by.get("已解决", 0), "已关闭": by.get("已关闭", 0)}
 
 
 # ---------------- 看板统计 ----------------
@@ -366,11 +499,15 @@ def kpi_snapshot() -> dict:
     runs = list_runs()
     done = [r for r in runs if r["status"] == "done"]
     last = done[0] if done else None
+    with _db() as conn:
+        defects_open = conn.execute(
+            "SELECT COUNT(*) c FROM defects WHERE status IN ('打开','修复中')").fetchone()["c"]
     return {
         "cases_total": total,
         "ai_share": round(ai / total, 4) if total else 0.0,
         "runs_total": len(runs),
         "runs_in_progress": sum(1 for r in runs if r["status"] == "in_progress"),
+        "defects_open": defects_open,
         "last_pass_rate": last["pass_rate"] if last else None,
         "last_run_name": last["name"] if last else "",
     }
@@ -438,6 +575,15 @@ def seed_demo() -> None:
         set_result(run_id, cid, result, note)
     finish_run(run_id)
 
+    # 演示缺陷：把失败/阻塞用例登记为缺陷，形成 执行 → 缺陷 闭环示例
+    severity_of = {"失败": "一般", "阻塞": "轻微"}
+    for r in [x for x in run_cases(run_id) if x["result"] in ("失败", "阻塞")][:3]:
+        create_defect(
+            title=f"[{r['module']}] {r['title']} 执行{'失败' if r['result'] == '失败' else '受阻'}",
+            module=r["module"], severity=severity_of[r["result"]],
+            description=f"来源：RUN-{run_id:04d} 执行结果「{r['result']}」；{r['note'] or '详见执行明细'}",
+            source_case_id=r["case_id"], run_id=run_id)
+
 
 def clear_all() -> None:
     """清空业务数据（保留表结构与发号计数归零）。"""
@@ -446,7 +592,10 @@ def clear_all() -> None:
         conn.execute("DELETE FROM test_runs")
         conn.execute("DELETE FROM cases")
         conn.execute("DELETE FROM gen_batches")
+        conn.execute("DELETE FROM defects")
         conn.execute("UPDATE counters SET value=0 WHERE name='case_id'")
+        conn.execute("UPDATE counters SET value=0 WHERE name='defect_id'")
+        _bump(conn)
 
 
 def backup_bytes() -> bytes:

@@ -12,7 +12,11 @@ st.set_page_config(page_title="AI 智能测试平台", page_icon="🧪", layout=
 inject_css()
 
 with st.sidebar:
-    st.markdown("## 🧪 AI 智能测试平台")
+    st.markdown(
+        '<div class="brand"><div class="logo">🧪</div><div>'
+        '<div class="n">AI 智能测试平台</div>'
+        '<div class="d">AI-POWERED TEST PLATFORM</div></div></div>',
+        unsafe_allow_html=True)
     st.caption("多 Agent 用例生成 · 用例库 · 测试执行 · 质量报告")
     st.divider()
     st.radio("Agent 运行模式", ["mock", "real"], horizontal=True, key="mode",

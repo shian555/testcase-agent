@@ -6,11 +6,12 @@ import plotly.express as px
 import streamlit as st
 
 import store
-from styles import (PRIMARY, SUCCESS, WARNING, kpi_card, page_header, result_styler)
+from styles import (DANGER, PLOTLY_CONFIG, PRIMARY, SUCCESS, WARNING,
+                    kpi_card, page_header, result_styler, style_chart)
 
 
 def render() -> None:
-    page_header("工作台", "测试资产与质量全景")
+    page_header("工作台", "测试资产、执行进度与质量全景")
     kpi = store.kpi_snapshot()
 
     if kpi["cases_total"] == 0 and kpi["runs_total"] == 0:
@@ -25,7 +26,7 @@ def render() -> None:
 def _onboarding() -> None:
     st.markdown(
         '<div class="banner"><div class="t">👋 欢迎使用 AI 智能测试平台</div>'
-        '<div class="d">平台提供「用例生成 → 采纳入库 → 测试执行 → 质量报告」完整闭环。'
+        '<div class="d">平台提供「用例生成 → 采纳入库 → 测试执行 → 质量报告 → 缺陷跟踪」完整闭环。'
         "当前还没有数据：可一键填充演示数据（mock 流水线跑样例 PRD 并完成一轮回归测试），"
         "或直接从用例生成开始。</div></div>",
         unsafe_allow_html=True)
@@ -41,7 +42,7 @@ def _onboarding() -> None:
 
 
 def _kpi_row(kpi: dict) -> None:
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         kpi_card("用例总数", kpi["cases_total"], "启用状态 · 含 AI 与手工")
     with c2:
@@ -50,9 +51,13 @@ def _kpi_row(kpi: dict) -> None:
         kpi_card("测试单", kpi["runs_total"],
                  f"进行中 {kpi['runs_in_progress']} 个", accent="#8B5CF6")
     with c4:
+        kpi_card("待处理缺陷", kpi["defects_open"], "打开 + 修复中",
+                 accent=DANGER if kpi["defects_open"] else SUCCESS)
+    with c5:
         last = kpi["last_pass_rate"]
+        name = kpi["last_run_name"] or "暂无已完成的测试单"
         kpi_card("最近通过率", f"{last:.1%}" if last is not None else "—",
-                 kpi["last_run_name"] or "暂无已完成的测试单",
+                 name[:12] + "…" if len(name) > 12 else name,  # 过长会换行撑高卡片
                  accent=SUCCESS if (last or 0) >= 0.9 else WARNING)
 
 
@@ -63,11 +68,10 @@ def _charts() -> None:
         stats = store.method_stats()
         if stats:
             df = pd.DataFrame([{"方法": s["method"], "数量": s["count"]} for s in stats])
-            fig = px.pie(df, names="方法", values="数量", hole=0.55,
-                         color_discrete_sequence=px.colors.qualitative.Safe)
-            fig.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0),
-                              legend=dict(orientation="h", y=-0.12))
-            st.plotly_chart(fig, use_container_width=True, key="dash_method")
+            fig = style_chart(px.pie(df, names="方法", values="数量", hole=0.58),
+                              height=300)  # 不指定色板 → 继承 style_chart 的企业色序
+            st.plotly_chart(fig, use_container_width=True, key="dash_method",
+                            config=PLOTLY_CONFIG)
         else:
             st.info("暂无用例")
 
@@ -77,11 +81,14 @@ def _charts() -> None:
         if stats:
             df = pd.DataFrame([{"优先级": s["priority"], "AI 生成": s["ai"],
                                 "手工创建": s["manual"]} for s in stats])
-            fig = px.bar(df, x="优先级", y=["AI 生成", "手工创建"], text_auto=True,
-                         color_discrete_map={"AI 生成": "#2563EB", "手工创建": "#94A3B8"})
-            fig.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0),
-                              barmode="stack", legend=dict(orientation="h", y=-0.18))
-            st.plotly_chart(fig, use_container_width=True, key="dash_prio")
+            fig = style_chart(px.bar(df, x="优先级", y=["AI 生成", "手工创建"],
+                                     text_auto=True,
+                                     color_discrete_map={"AI 生成": "#2563EB",
+                                                         "手工创建": "#94A3B8"}),
+                              height=300)
+            fig.update_layout(barmode="stack")
+            st.plotly_chart(fig, use_container_width=True, key="dash_prio",
+                            config=PLOTLY_CONFIG)
         else:
             st.info("暂无用例")
 
@@ -89,10 +96,11 @@ def _charts() -> None:
     trend = store.trend_last_runs(10)
     if trend:
         df = pd.DataFrame([{"测试单": t["run"], "通过率": t["pass_rate"]} for t in trend])
-        fig = px.line(df, x="测试单", y="通过率", markers=True)
-        fig.update_layout(height=260, margin=dict(l=0, r=0, t=10, b=0),
-                          yaxis_tickformat=".0%", yaxis_range=[0, 1.05])
-        st.plotly_chart(fig, use_container_width=True, key="dash_trend")
+        fig = style_chart(px.line(df, x="测试单", y="通过率", markers=True), height=280,
+                          legend=None)
+        fig.update_layout(yaxis_tickformat=".0%", yaxis_range=[0, 1.05])
+        st.plotly_chart(fig, use_container_width=True, key="dash_trend",
+                        config=PLOTLY_CONFIG)
     else:
         st.caption("还没有已完成的测试单，通过率趋势将在完成首轮执行后呈现。")
 

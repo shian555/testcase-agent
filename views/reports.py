@@ -7,8 +7,8 @@ import streamlit as st
 
 from excel_export import run_report_workbook
 import store
-from styles import (DANGER, PRIMARY, SUCCESS, WARNING, banner, kpi_card,
-                    page_header, result_styler)
+from styles import (DANGER, PLOTLY_CONFIG, PRIMARY, SUCCESS, WARNING, banner,
+                    kpi_card, page_header, result_styler, style_chart)
 
 
 def render() -> None:
@@ -29,8 +29,8 @@ def render() -> None:
     _kpi_band(run)
     _conclusion(run, rows)
     _charts(run, rows)
-    _issue_list(rows)
-    _exports(run, rows)
+    _issue_list(run, rows)
+    _exports(run)
 
 
 def _pick_run(runs: list[dict]) -> dict:
@@ -92,14 +92,14 @@ def _charts(run: dict, rows: list[dict]) -> None:
                                (("通过", "passed"), ("失败", "failed"), ("阻塞", "blocked"),
                                 ("跳过", "skipped"), ("未执行", "pending"))])
         counts = counts[counts["数量"] > 0]
-        fig = px.pie(counts, names="结果", values="数量", hole=0.55,
-                     color="结果",
-                     color_discrete_map={"通过": "#16A34A", "失败": "#DC2626",
-                                         "阻塞": "#D97706", "跳过": "#94A3B8",
-                                         "未执行": "#CBD5E1"})
-        fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0),
-                          showlegend=True, legend=dict(orientation="h", y=-0.1))
-        st.plotly_chart(fig, use_container_width=True, key="pie_result")
+        fig = style_chart(px.pie(counts, names="结果", values="数量", hole=0.58,
+                                 color="结果",
+                                 color_discrete_map={"通过": "#16A34A", "失败": "#DC2626",
+                                                     "阻塞": "#D97706", "跳过": "#94A3B8",
+                                                     "未执行": "#CBD5E1"}),
+                          height=300)
+        st.plotly_chart(fig, use_container_width=True, key="pie_result",
+                        config=PLOTLY_CONFIG)
 
     with c2:
         st.markdown("##### 优先级通过率")
@@ -113,24 +113,28 @@ def _charts(run: dict, rows: list[dict]) -> None:
             prio_rows.append({"优先级": p, "通过率": ok / exe if exe else 0.0,
                               "明细": f"{ok}/{exe}"})
         if prio_rows:
-            fig = px.bar(pd.DataFrame(prio_rows), x="优先级", y="通过率",
-                         color="优先级", text="明细",
-                         color_discrete_map={"P0": "#DC2626", "P1": "#D97706", "P2": "#94A3B8"})
-            fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0),
-                              yaxis_tickformat=".0%", yaxis_range=[0, 1.05], showlegend=False)
-            st.plotly_chart(fig, use_container_width=True, key="bar_prio")
+            fig = style_chart(px.bar(pd.DataFrame(prio_rows), x="优先级", y="通过率",
+                                     color="优先级", text="明细",
+                                     color_discrete_map={"P0": "#DC2626", "P1": "#D97706",
+                                                         "P2": "#94A3B8"}),
+                              height=300, legend=None)
+            fig.update_layout(yaxis_tickformat=".0%", yaxis_range=[0, 1.05])
+            st.plotly_chart(fig, use_container_width=True, key="bar_prio",
+                            config=PLOTLY_CONFIG)
 
     st.markdown("##### 模块 × 结果")
     mod = pd.DataFrame([{"模块": r["module"], "结果": r["result"]} for r in rows])
-    fig = px.histogram(mod, x="模块", color="结果", barmode="stack",
-                       color_discrete_map={"通过": "#16A34A", "失败": "#DC2626",
-                                           "阻塞": "#D97706", "跳过": "#94A3B8",
-                                           "未执行": "#CBD5E1"})
-    fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0))
-    st.plotly_chart(fig, use_container_width=True, key="bar_module")
+    fig = style_chart(px.histogram(mod, x="模块", color="结果", barmode="stack",
+                                   color_discrete_map={"通过": "#16A34A", "失败": "#DC2626",
+                                                       "阻塞": "#D97706", "跳过": "#94A3B8",
+                                                       "未执行": "#CBD5E1"}),
+                      height=300)
+    fig.update_layout(bargap=0.35)  # 单模块时柱子不再横贯全宽
+    st.plotly_chart(fig, use_container_width=True, key="bar_module",
+                    config=PLOTLY_CONFIG)
 
 
-def _issue_list(rows: list[dict]) -> None:
+def _issue_list(run: dict, rows: list[dict]) -> None:
     issues = [r for r in rows if r["result"] in ("失败", "阻塞")]
     st.markdown(f"##### 问题清单（失败 / 阻塞，共 {len(issues)} 条）")
     if not issues:
@@ -141,18 +145,60 @@ def _issue_list(rows: list[dict]) -> None:
                         "备注": r["note"] or "—"} for r in issues])
     st.dataframe(result_styler(df, "类型"), width="stretch", hide_index=True, height=260)
 
+    # 执行失败 → 缺陷登记（企业闭环：报告里发现的问题可跟踪）
+    existing = {d["source_case_id"] for d in store.list_defects()
+                if d["source_case_id"]}
+    fresh = [r for r in issues if r["case_id"] not in existing]
+    if not fresh:
+        st.caption("✅ 本单失败/阻塞用例均已登记缺陷，可在「缺陷管理」跟踪修复进度。")
+        return
+    with st.popover(f"🐞 将失败用例登记为缺陷（{len(fresh)} 条未登记）"):
+        st.caption("登记后可在「缺陷管理」页跟踪 修复 → 验证关闭 全流程。")
+        options = [f'{r["case_id"]} · {r["title"]}（{r["result"]}）' for r in fresh]
+        pick = st.selectbox("选择用例", options, key="rep_def_pick")
+        severity = st.selectbox("严重程度", list(store._SEVERITIES), index=1,
+                                key="rep_def_sev")
+        if st.button("登记缺陷", type="primary"):
+            r = fresh[options.index(pick)]
+            did = store.create_defect(
+                title=f"[{r['module']}] {r['title']}", module=r["module"],
+                severity=severity,
+                description=f"来源：RUN-{run['id']:04d} 执行「{r['result']}」；{r['note'] or ''}",
+                source_case_id=r["case_id"], run_id=run["id"])
+            st.toast(f"缺陷 {did} 已登记")
+            st.rerun()
 
-def _exports(run: dict, rows: list[dict]) -> None:
+
+@st.cache_data(show_spinner=False)
+def _export_run_excel(version: int, run_id: int) -> bytes:
+    """执行报表 Excel：version 作为缓存盐，数据未变时零重建。"""
+    run = store.get_run(run_id)
+    if run is None:
+        return b""
+    return run_report_workbook(run, store.run_cases(run_id))
+
+
+@st.cache_data(show_spinner=False)
+def _export_run_md(version: int, run_id: int) -> bytes:
+    run = store.get_run(run_id)
+    if run is None:
+        return b""
+    return _run_markdown(run, store.run_cases(run_id)).encode("utf-8")
+
+
+def _exports(run: dict) -> None:
     st.markdown("##### 导出")
+    v = store.version()
+    rid = run["id"]
     d1, d2 = st.columns(2)
     d1.download_button("下载执行报表.xlsx（汇总+明细+问题清单）",
-                       data=run_report_workbook(run, rows),
-                       file_name=f"RUN-{run['id']:04d}_执行报表.xlsx",
+                       data=_export_run_excel(v, rid),
+                       file_name=f"RUN-{rid:04d}_执行报表.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        use_container_width=True)
     d2.download_button("下载 report.md",
-                       data=_run_markdown(run, rows).encode("utf-8"),
-                       file_name=f"RUN-{run['id']:04d}_执行报告.md",
+                       data=_export_run_md(v, rid),
+                       file_name=f"RUN-{rid:04d}_执行报告.md",
                        mime="text/markdown", use_container_width=True)
 
 

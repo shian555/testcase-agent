@@ -6,6 +6,7 @@ Page 对象——1.40+ 不接受 url_path 字符串，故集中一处、按 key 
 import streamlit as st
 
 import views.dashboard
+import views.defects
 import views.execution
 import views.generate
 import views.library
@@ -23,8 +24,10 @@ PAGES = {
                          icon=":material/play_circle:", url_path="execution"),
     "reports": st.Page(views.reports.render, title="测试报告",
                        icon=":material/description:", url_path="reports"),
+    "defects": st.Page(views.defects.render, title="缺陷管理",
+                       icon=":material/bug_report:", url_path="defects"),
     "settings": st.Page(views.settings.render, title="设置",
                         icon=":material/settings:", url_path="settings"),
 }
 
-ORDER = ["dashboard", "generate", "library", "execution", "reports", "settings"]
+ORDER = ["dashboard", "generate", "library", "execution", "reports", "defects", "settings"]

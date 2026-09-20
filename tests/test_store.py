@@ -108,11 +108,50 @@ def test_seed_demo_and_clear(tmp_db):
     runs = store.list_runs()
     assert len(runs) == 1 and runs[0]["status"] == "done"
     assert runs[0]["failed"] > 0 and runs[0]["passed"] > 0  # 真实感结果分布
+    assert store.defect_stats()["total"] > 0  # 演示数据同步铺缺陷
 
     kpi = store.kpi_snapshot()
     assert kpi["cases_total"] == len(cases) and kpi["last_pass_rate"] is not None
+    assert kpi["defects_open"] > 0
     assert store.method_stats() and store.priority_stats()
 
     store.clear_all()
     assert store.list_cases() == [] and store.list_runs() == []
+    assert store.defect_stats()["total"] == 0
     assert store.next_case_id() == "TC0001"  # 发号归零
+
+
+def test_defect_crud_and_flow(tmp_db):
+    cid = _case("验证码为空仍可提交", module="登录")
+    v0 = store.version()
+    did = store.create_defect(title="[登录] 验证码为空仍可提交", module="登录",
+                              severity="严重", description="实际可提交",
+                              source_case_id=cid, run_id=None)
+    assert did == "BUG0001"
+    assert store.version() == v0 + 1  # 写操作推进数据版本（导出缓存盐）
+
+    got = store.get_defect(did)
+    assert got["status"] == "打开" and got["severity"] == "严重"
+    assert got["source_case_id"] == cid
+
+    # 状态流转：打开 → 修复中 → 已解决 → 已关闭；非法值被拒
+    for status in ("修复中", "已解决", "已关闭"):
+        store.update_defect(did, status=status)
+        assert store.get_defect(did)["status"] == status
+    store.update_defect(did, status="不存在的状态")
+    assert store.get_defect(did)["status"] == "已关闭"
+    store.update_defect(did, severity="轻微")
+    assert store.get_defect(did)["severity"] == "轻微"
+
+    # 过滤与列表
+    store.create_defect(title="另一缺陷", module="注册", severity="轻微")
+    assert len(store.list_defects()) == 2
+    assert [d["id"] for d in store.list_defects(status="已关闭")] == [did]
+    assert len(store.list_defects(severity="轻微")) == 2  # BUG0001 已改为轻微
+    assert len(store.list_defects(keyword="验证码")) == 1
+    stats = store.defect_stats()
+    assert stats["total"] == 2 and stats["已关闭"] == 1
+
+    store.delete_defects([did])
+    assert store.get_defect(did) is None
+    assert store.defect_stats()["total"] == 1

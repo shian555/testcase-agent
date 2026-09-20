@@ -12,6 +12,12 @@ import store
 from styles import page_header, priority_styler
 
 
+@st.cache_data(show_spinner=False)
+def _export_library_excel(version: int) -> bytes:
+    """用例库 Excel：version 为缓存盐，数据未变时零重建。"""
+    return library_workbook(store.list_cases(status="all"))
+
+
 def render() -> None:
     page_header("用例库", "团队测试资产：检索筛选、圈选建单、编辑维护")
 
@@ -19,6 +25,7 @@ def render() -> None:
     if not cases:
         st.info("用例库为空。先去「用例生成」采纳 AI 产出，或在下方新建手工用例。")
         _new_case_expander()
+        _import_expander()
         return
 
     selected_ids = _case_table(cases)
@@ -27,6 +34,7 @@ def render() -> None:
 
     _case_detail(cases)
     _new_case_expander()
+    _import_expander()
 
 
 def _toolbar_and_query() -> list[dict]:
@@ -83,10 +91,10 @@ def _batch_actions(ids: list[str]) -> None:
             store.delete_cases(ids)
             st.toast(f"已删除 {len(ids)} 条用例")
             st.rerun()
-    a4.download_button("⬇️ Excel", data=library_workbook(
-        store.list_cases(status="all")), file_name="用例库.xlsx",
-        use_container_width=True,
-        help="导出当前用例库全部用例（含停用）")
+    a4.download_button("⬇️ Excel", data=_export_library_excel(store.version()),
+                       file_name="用例库.xlsx",
+                       use_container_width=True,
+                       help="导出当前用例库全部用例（含停用）")
     with a5:
         from nav import PAGES  # 延迟导入：避免 nav → views → nav 循环
         st.page_link(PAGES["execution"], label="▶️ 前往测试执行", use_container_width=True)
@@ -161,3 +169,91 @@ def _new_case_expander() -> None:
                                      expected=expected, tags=tags.strip())
                 st.toast(f"手工用例 {cid} 已创建")
                 st.rerun()
+
+
+# ---------------- Excel 批量导入 ----------------
+
+_IMPORT_COLS = {"模块": "module", "标题": "title", "优先级": "priority", "方法": "method",
+                "前置条件": "precondition", "步骤": "steps", "预期结果": "expected",
+                "标签": "tags"}
+
+
+def _parse_import(upload) -> list[dict]:
+    """解析上传的 Excel：按表头取列，容忍多余列；返回用例 dict 列表。"""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(upload, read_only=True, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
+    wb.close()
+    if not rows:
+        return []
+    headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+    colmap = {i: _IMPORT_COLS[h] for i, h in enumerate(headers) if h in _IMPORT_COLS}
+    if "title" not in colmap.values():
+        raise ValueError("缺少「标题」列——请使用导入模板的表头")
+
+    items = []
+    for raw in rows[1:]:
+        rec = {name: ("" if raw[i] is None else str(raw[i]).strip())
+               for i, name in colmap.items()}
+        if rec.get("title") and rec.get("module"):
+            rec.setdefault("priority", "P2")
+            rec.setdefault("method", "手工")
+            items.append(rec)
+    return items
+
+
+def _import_expander() -> None:
+    with st.expander("📥 批量导入用例（Excel）", expanded=False):
+        st.caption("从 Excel 迁移存量用例：必填列「模块」「标题」，优先级缺省 P2，方法缺省「手工」；"
+                   "与用例库导出的 Excel 格式兼容。")
+        st.download_button("⬇️ 下载导入模板", data=library_workbook([]),
+                           file_name="用例导入模板.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
+        upload = st.file_uploader("上传 Excel 文件", type=["xlsx"], key="import_xlsx")
+        if upload is None:
+            return
+        try:
+            items = _parse_import(upload)
+        except Exception as e:  # noqa: BLE001 - 解析失败统一提示
+            st.error(f"解析失败：{e}")
+            return
+        if not items:
+            st.warning("未解析到有效数据行（模块与标题需同时非空）。")
+            return
+
+        df = pd.DataFrame([{"导入": True, "模块": it["module"], "标题": it["title"],
+                            "优先级": it.get("priority", "P2"), "方法": it.get("method", "手工"),
+                            "前置条件": it.get("precondition", ""), "步骤": it.get("steps", ""),
+                            "预期结果": it.get("expected", ""), "标签": it.get("tags", "")}
+                           for it in items])
+        st.caption(f"解析到 **{len(items)}** 条用例，预览确认后入库：")
+        ed = st.data_editor(df, key="import_preview", hide_index=True, width="stretch",
+                            height=280,
+                            column_config={
+                                "导入": st.column_config.CheckboxColumn("导入", default=True),
+                                "模块": st.column_config.TextColumn("模块", disabled=True),
+                                "标题": st.column_config.TextColumn("标题", disabled=True,
+                                                                    width="medium"),
+                                "优先级": st.column_config.SelectboxColumn(
+                                    "优先级", options=["P0", "P1", "P2"], required=True),
+                                "前置条件": st.column_config.TextColumn("前置条件", width="large",
+                                                                    disabled=True),
+                                "步骤": st.column_config.TextColumn("步骤", width="large",
+                                                                 disabled=True),
+                                "预期结果": st.column_config.TextColumn("预期结果", width="large",
+                                                                    disabled=True),
+                            })
+        n = int(ed["导入"].sum())
+        if st.button(f"✅ 导入 {n} 条用例（来源：手工）", type="primary",
+                     disabled=n == 0, use_container_width=True, key="import_submit"):
+            chosen = [{"module": r["模块"], "title": r["标题"], "priority": r["优先级"],
+                       "method": r["方法"] if r["方法"] else "手工",
+                       "precondition": r["前置条件"], "steps": r["步骤"],
+                       "expected": r["预期结果"], "tags": r["标签"]}
+                      for _, r in ed[ed["导入"]].iterrows()]
+            ids = store.add_cases(chosen, source="manual")
+            st.toast(f"已导入 {len(ids)} 条用例（{ids[0]} ~ {ids[-1]}）")
+            st.rerun()
