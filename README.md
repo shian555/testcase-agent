@@ -74,6 +74,8 @@ python -m streamlit run app.py       # ② 平台：工作台 → 填充演示�
 python -m pytest tests/ -v           # ③ 单测（流水线契约 + 持久层 CRUD）
 ```
 
+> **Windows 一键启动**：双击 `start.bat`——自动安装依赖、启动平台并打开浏览器（`http://localhost:8501`），关闭窗口即停止服务；可右键"发送到桌面快捷方式"。
+
 默认 `mock` 模式用规则化 Agent（确定性、可复现、无需 API Key），用来验证链路与方法论注入是否正确。
 
 ## 测试方法论（methods.py）
