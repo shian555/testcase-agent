@@ -103,16 +103,24 @@ def test_delete_case_cascades_run_results(tmp_db):
 
 def test_seed_demo_and_clear(tmp_db):
     store.seed_demo()
+    store.seed_demo()  # 幂等：重复填充不产生重复数据
     cases = store.list_cases()
-    assert len(cases) > 0 and all(c["source"] == "ai" for c in cases)
+    assert len(cases) > 0 and {c["source"] for c in cases} == {"ai", "manual"}
+
     runs = store.list_runs()
-    assert len(runs) == 1 and runs[0]["status"] == "done"
-    assert runs[0]["failed"] > 0 and runs[0]["passed"] > 0  # 真实感结果分布
-    assert store.defect_stats()["total"] > 0  # 演示数据同步铺缺陷
+    assert len(runs) == 3 and sum(r["status"] == "done" for r in runs) == 2
+    assert runs[0]["status"] == "in_progress"  # 功能测试保持执行中间态
+    assert all(r["passed"] > 0 for r in runs if r["status"] == "done")
+
+    # 缺陷覆盖 打开 / 修复中 / 已解决 / 已关闭 全状态
+    stats = store.defect_stats()
+    assert (stats["total"], stats["打开"], stats["修复中"],
+            stats["已解决"], stats["已关闭"]) == (5, 2, 1, 1, 1)
 
     kpi = store.kpi_snapshot()
     assert kpi["cases_total"] == len(cases) and kpi["last_pass_rate"] is not None
-    assert kpi["defects_open"] > 0
+    assert kpi["defects_open"] == 3  # 打开 2 + 修复中 1
+    assert len(store.trend_last_runs(5)) == 2  # 两张已完成单形成趋势线
     assert store.method_stats() and store.priority_stats()
 
     store.clear_all()

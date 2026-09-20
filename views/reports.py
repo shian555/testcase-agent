@@ -8,11 +8,12 @@ import streamlit as st
 from excel_export import run_report_workbook
 import store
 from styles import (DANGER, PLOTLY_CONFIG, PRIMARY, SUCCESS, WARNING, banner,
-                    kpi_card, page_header, result_styler, style_chart)
+                    guide_steps, kpi_card, page_header, result_styler, style_chart)
 
 
 def render() -> None:
     page_header("测试报告", "单次测试单的执行统计、模块/优先级下钻与发布建议")
+    guide_steps(["选择测试单", "查看结论与下钻分析", "登记缺陷并导出报告"])
     runs = store.list_runs()
     if not runs:
         st.info("还没有测试单。先去「测试执行」创建并记录执行结果。")

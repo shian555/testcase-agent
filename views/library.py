@@ -9,7 +9,7 @@ import streamlit as st
 from excel_export import library_workbook
 from methods import METHODS
 import store
-from styles import page_header, priority_styler
+from styles import guide_steps, page_header, priority_styler
 
 
 @st.cache_data(show_spinner=False)
@@ -20,6 +20,7 @@ def _export_library_excel(version: int) -> bytes:
 
 def render() -> None:
     page_header("用例库", "团队测试资产：检索筛选、圈选建单、编辑维护")
+    guide_steps(["筛选或导入用例", "勾选圈选目标用例", "批量新建测试单 / 维护"])
 
     cases = _toolbar_and_query()
     if not cases:

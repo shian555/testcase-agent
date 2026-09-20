@@ -13,7 +13,7 @@ from excel_export import generation_workbook
 from methods import METHODS
 from pipeline import cases_csv, report_markdown
 import store
-from styles import page_header, priority_styler
+from styles import guide_steps, page_header, priority_styler
 
 
 def _get_agents(mode: str):
@@ -32,6 +32,7 @@ def _export_generation_excel(n_points: int, n_cases: int, score: int, case_ids: 
 
 def render() -> None:
     page_header("用例生成", "粘贴 PRD，三 Agent 流水线产出测试点与用例，人工勾选采纳后沉淀入用例库")
+    guide_steps(["粘贴 PRD 文档", "点击「开始生成」", "评审后勾选采纳入库", "导出报告归档"])
 
     with st.expander("📐 注入的测试方法论", expanded=False):
         st.markdown("　".join(f"**{m}**" for m in METHODS))

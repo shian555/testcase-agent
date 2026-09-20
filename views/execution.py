@@ -9,7 +9,7 @@ import streamlit as st
 from excel_export import run_report_workbook
 from methods import METHODS
 import store
-from styles import RESULT_COLORS, page_header, pill, result_styler
+from styles import RESULT_COLORS, guide_steps, page_header, pill, result_styler
 
 _RESULTS = ["未执行", "通过", "失败", "阻塞", "跳过"]
 
@@ -25,6 +25,7 @@ def _export_run_excel(version: int, run_id: int) -> bytes:
 
 def render() -> None:
     page_header("测试执行", "从用例库圈选用例创建测试单，逐条记录执行结果")
+    guide_steps(["选择 / 新建测试单", "逐条记录结果与备注", "未执行清零后标记完成"])
     runs = store.list_runs()
     _create_run_expander(runs)
 

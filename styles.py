@@ -46,38 +46,44 @@ _CSS = f"""
 [data-testid="stHeader"] {{ background: transparent; }}
 #MainMenu, footer, [data-testid="stStatusWidget"] {{ visibility: hidden; }}
 [data-testid="stSidebar"] {{
-    background: {CARD}; border-right: 1px solid {BORDER};
-    box-shadow: 2px 0 12px rgba(15, 23, 42, .03);
+    background: linear-gradient(180deg, #0B1220 0%, #101B33 100%);
+    border-right: none;
+    box-shadow: 2px 0 16px rgba(2, 6, 23, .35);
 }}
-[data-testid="stSidebar"] * {{ color: {TEXT}; }}
-[data-testid="stSidebar"] hr {{ margin: .35rem 0; border-color: {BORDER}; }}
+[data-testid="stSidebar"] * {{ color: #C7D2E3; }}
+[data-testid="stSidebar"] hr {{ margin: .35rem 0; border-color: rgba(148, 163, 184, .18); }}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p,
+[data-testid="stSidebar"] small {{ color: #7C8DB5 !important; font-size: .78rem; }}
+[data-testid="stSidebar"] label p {{ color: #8CA0BD; }}
 
-/* 侧边导航：圆角高亮，当前页蓝底 */
+/* 侧边导航：深色底圆角高亮，当前页蓝色渐变 + 左侧光条 */
 [data-testid="stSidebarNav"] {{ padding-top: .6rem; }}
 [data-testid="stSidebar"] span, [data-testid="stSidebar"] a {{ font-size: .92rem; }}
 [data-testid="stPageLink-NavLink"], [data-testid="stSidebarNav"] a {{
     border-radius: 10px !important; padding: .42rem .75rem !important;
+    color: #AAB8CE !important;
     transition: background .12s ease, color .12s ease;
 }}
 [data-testid="stPageLink-NavLink"]:hover, [data-testid="stSidebarNav"] a:hover {{
-    background: #F1F5F9;
+    background: rgba(148, 163, 184, .13) !important; color: #FFFFFF !important;
 }}
 [aria-current="page"][data-testid="stPageLink-NavLink"],
 [data-testid="stSidebarNav"] a[aria-current="page"] {{
-    background: {PRIMARY_LIGHT} !important; color: {PRIMARY_DARK} !important;
-    font-weight: 600;
+    background: linear-gradient(90deg, rgba(37, 99, 235, .45), rgba(37, 99, 235, .10)) !important;
+    color: #FFFFFF !important; font-weight: 600;
+    box-shadow: inset 3px 0 0 {PRIMARY};
 }}
 
-/* 品牌块 */
+/* 品牌块（深色底） */
 .brand {{ display: flex; align-items: center; gap: .65rem; padding: .2rem 0 .4rem 0; }}
 .brand .logo {{
     width: 38px; height: 38px; border-radius: 10px; flex: none;
     display: flex; align-items: center; justify-content: center; font-size: 1.15rem;
     background: linear-gradient(135deg, {PRIMARY}, {PRIMARY_DARK});
-    box-shadow: 0 4px 10px rgba(37, 99, 235, .35);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, .5);
 }}
-.brand .n {{ font-weight: 700; font-size: 1.02rem; line-height: 1.25; }}
-.brand .d {{ color: {MUTED}; font-size: .72rem; letter-spacing: .04em; }}
+.brand .n {{ font-weight: 700; font-size: 1.02rem; line-height: 1.25; color: #FFFFFF; }}
+.brand .d {{ color: #7C8DB5; font-size: .72rem; letter-spacing: .04em; }}
 
 /* ---------- 页面标题 ---------- */
 .page-header {{ margin-bottom: .25rem; }}
@@ -89,6 +95,22 @@ _CSS = f"""
 .page-header hr {{
     border: none; border-top: 1px solid {BORDER}; margin: .6rem 0 1.1rem 0;
 }}
+
+/* ---------- 操作指引条：① → ② → ③ 步骤胶囊 ---------- */
+.guide {{ display: flex; align-items: center; flex-wrap: wrap; gap: .45rem; margin: 0 0 1.05rem 0; }}
+.guide .gs {{
+    display: inline-flex; align-items: center; gap: .45rem;
+    background: {CARD}; border: 1px solid {BORDER}; border-radius: 999px;
+    padding: .28rem .9rem .28rem .3rem; font-size: .83rem; color: #334155;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+}}
+.guide .gs-n {{
+    width: 21px; height: 21px; border-radius: 50%; flex: none;
+    background: linear-gradient(135deg, {PRIMARY}, {PRIMARY_DARK}); color: #FFFFFF;
+    font-size: .72rem; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+}}
+.guide .gs-a {{ color: #94A3B8; font-size: .85rem; }}
 
 /* ---------- KPI 卡片：白卡 + 顶部色条 + 悬浮上浮 ---------- */
 .kpi-card {{
@@ -193,6 +215,15 @@ def page_header(title: str, desc: str = "") -> None:
         + (f"<p>{desc}</p>" if desc else "")
         + "<hr></div>",
         unsafe_allow_html=True)
+
+
+def guide_steps(steps: list[str]) -> None:
+    """页面操作指引条：① → ② → ③ 步骤胶囊，告诉用户本页的标准操作路径。"""
+    chips = "".join(
+        f'<span class="gs"><span class="gs-n">{i + 1}</span>{s}</span>'
+        + ('' if i == len(steps) - 1 else '<span class="gs-a">→</span>')
+        for i, s in enumerate(steps))
+    st.markdown(f'<div class="guide">{chips}</div>', unsafe_allow_html=True)
 
 
 def kpi_card(label: str, value, delta: str = "", accent: str = PRIMARY) -> None:

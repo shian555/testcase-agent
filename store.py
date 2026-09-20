@@ -544,7 +544,10 @@ def trend_last_runs(n: int = 10) -> list[dict]:
 # ---------------- 演示数据 / 清空 ----------------
 
 def seed_demo() -> None:
-    """一键填充演示数据：mock 流水线跑样例 PRD → 采纳入库 → 建一个已完成的测试单。"""
+    """一键填充演示数据：电商场景三模块 + 回归/冒烟/功能三张测试单 + 全状态缺陷。
+
+    幂等：同模块同名的用例不会重复入库；库中已有全部演示数据时为空操作。
+    """
     from agents import MockAnalyzerAgent, MockGeneratorAgent, MockReviewerAgent
     from pipeline import run as run_pipeline
 
@@ -556,33 +559,118 @@ def seed_demo() -> None:
     items = [{"module": c.module, "title": c.title, "precondition": c.precondition,
               "steps": c.steps, "expected": c.expected, "priority": c.priority,
               "method": c.method, "testpoint_id": c.testpoint_id} for c in cases]
-    _, ids = adopt_batch(prd_text, "mock", review.score, items)
-    if not ids:
+    _, login_ids = adopt_batch(prd_text, "mock", review.score, items, dedup=True)
+
+    # 手工补充 注册 / 购物车 两模块（模拟从 Excel 导入的存量用例）
+    manual = [
+        {"module": "用户注册", "title": "手机号注册成功并收到验证码", "priority": "P0",
+         "method": "场景法", "tags": "冒烟", "precondition": "手机号未注册",
+         "steps": "1. 输入未注册手机号\n2. 点击获取验证码\n3. 填写验证码与密码并提交",
+         "expected": "注册成功，跳转至首页"},
+        {"module": "用户注册", "title": "已注册手机号重复注册给出引导", "priority": "P1",
+         "method": "等价类", "precondition": "手机号已注册",
+         "steps": "1. 输入已注册手机号\n2. 点击获取验证码",
+         "expected": "提示「该手机号已注册」，引导去登录"},
+        {"module": "用户注册", "title": "弱密码强度校验", "priority": "P2",
+         "method": "边界值",
+         "steps": "1. 输入 7 位纯数字密码\n2. 提交注册",
+         "expected": "提示密码强度不足，要求字母+数字组合"},
+        {"module": "用户注册", "title": "验证码有效期 5 分钟", "priority": "P2",
+         "method": "场景法",
+         "steps": "1. 获取验证码\n2. 等待 6 分钟后填写提交",
+         "expected": "提示验证码已过期，可重新获取"},
+        {"module": "购物车", "title": "加入购物车后角标数量同步", "priority": "P0",
+         "method": "场景法", "tags": "冒烟", "precondition": "已登录，角标为 0",
+         "steps": "1. 商品详情页点击「加入购物车」\n2. 观察底部导航角标",
+         "expected": "角标数量 +1，与购物车内件数一致"},
+        {"module": "购物车", "title": "删除商品后合计金额重算", "priority": "P1",
+         "method": "场景法", "precondition": "购物车内含 2 件商品",
+         "steps": "1. 左滑删除其中 1 件\n2. 查看合计金额",
+         "expected": "合计金额同步减少，角标 -1"},
+        {"module": "购物车", "title": "单商品购买数量上限 99 件", "priority": "P2",
+         "method": "边界值",
+         "steps": "1. 数量步进调至 99 与 100\n2. 观察提交结果",
+         "expected": "99 正常保存；100 提示超出单商品上限"},
+        {"module": "购物车", "title": "下架商品不参与结算", "priority": "P1",
+         "method": "错误猜测", "precondition": "购物车内含 1 件已下架商品",
+         "steps": "1. 全选商品点击结算\n2. 查看订单明细",
+         "expected": "下架商品被自动剔除并提示，仅结算有效商品"},
+    ]
+    existing = {(c["module"], c["title"]) for c in list_cases()}
+    fresh_manual = [m for m in manual if (m["module"], m["title"]) not in existing]
+    manual_ids = add_cases(fresh_manual, source="manual") if fresh_manual else []
+    if not login_ids and not manual_ids:
         return
 
-    run_id = create_run(name="登录模块回归测试（演示数据）", env="测试环境",
-                        note="由平台演示数据自动创建", case_ids=ids)
-    # 确定性地铺一组真实感执行结果：绝大多数通过，少量失败/阻塞/跳过
-    for i, cid in enumerate(ids):
-        if i % 11 == 3:
-            result, note = "失败", "实际未给出校验提示，已提缺陷"
-        elif i % 17 == 5:
-            result, note = "阻塞", "依赖环境暂不可用"
-        elif i % 23 == 7:
-            result, note = "跳过", "本迭代不涉及"
-        else:
-            result, note = "通过", ""
-        set_result(run_id, cid, result, note)
-    finish_run(run_id)
+    # ① 登录模块回归（已完成 · 通过率 78.8%）：确定性铺真实感结果分布
+    defect_sources: list[tuple[dict, str, str]] = []  # (执行行, 严重程度, 备注)
+    if login_ids:
+        run1 = create_run(name="登录模块回归测试", env="测试环境",
+                          note="v2.4.0 发布前回归", case_ids=login_ids)
+        for i, cid in enumerate(login_ids):
+            if i % 11 == 3:
+                set_result(run1, cid, "失败", "实际未给出校验提示，已提缺陷")
+            elif i % 17 == 5:
+                set_result(run1, cid, "阻塞", "验证码服务环境暂不可用")
+            elif i % 23 == 7:
+                set_result(run1, cid, "跳过", "本迭代不涉及")
+            else:
+                set_result(run1, cid, "通过", "")
+        finish_run(run1)
+        rows1 = run_cases(run1)
+        fails = [r for r in rows1 if r["result"] == "失败"]
+        blocks = [r for r in rows1 if r["result"] == "阻塞"]
+        if fails:
+            defect_sources.append((fails[0], "一般", "打开"))
+        if blocks:
+            defect_sources.append((blocks[0], "轻微", "打开"))
+        if len(fails) > 1:
+            defect_sources.append((fails[1], "一般", "已解决"))   # 已修复，待回归验证
+        if len(blocks) > 1:
+            defect_sources.append((blocks[1], "轻微", "已关闭"))  # 已关闭
 
-    # 演示缺陷：把失败/阻塞用例登记为缺陷，形成 执行 → 缺陷 闭环示例
-    severity_of = {"失败": "一般", "阻塞": "轻微"}
-    for r in [x for x in run_cases(run_id) if x["result"] in ("失败", "阻塞")][:3]:
-        create_defect(
-            title=f"[{r['module']}] {r['title']} 执行{'失败' if r['result'] == '失败' else '受阻'}",
-            module=r["module"], severity=severity_of[r["result"]],
-            description=f"来源：RUN-{run_id:04d} 执行结果「{r['result']}」；{r['note'] or '详见执行明细'}",
-            source_case_id=r["case_id"], run_id=run_id)
+    # ② 每日冒烟（已完成 · P0 用例 · 高通过率，其中 1 条严重缺陷在修）
+    p0_cases = list_cases(priority=["P0"], status="active")[:10]
+    if p0_cases:
+        run2 = create_run(name="每日冒烟测试", env="测试环境",
+                          note="每日构建后圈选 P0 用例", case_ids=[c["id"] for c in p0_cases])
+        smoke_fail = None
+        for c in p0_cases:
+            if "角标" in c["title"]:
+                smoke_fail = c
+                set_result(run2, c["id"], "失败", "角标数量未同步刷新，已提严重缺陷")
+            else:
+                set_result(run2, c["id"], "通过", "")
+        if smoke_fail is not None:
+            defect_sources.insert(1, ({"case_id": smoke_fail["id"], "module": smoke_fail["module"],
+                                       "title": smoke_fail["title"],
+                                       "note": "角标数量与购物车实际件数不一致",
+                                       "result": "冒烟失败"},
+                                      "严重", "修复中"))
+        finish_run(run2)
+
+    # ③ 功能测试（进行中 · 部分执行）：演示执行中间态
+    func_ids = manual_ids + (login_ids[-4:] if login_ids else [])
+    if func_ids:
+        run3 = create_run(name="注册与购物车功能测试", env="预发环境",
+                          note="迭代 2410 功能验证", case_ids=func_ids)
+        for i, cid in enumerate(func_ids[:5]):
+            set_result(run3, cid, "失败" if i == 3 else "通过",
+                       "提示文案含糊，待产品确认口径" if i == 3 else "")
+    # run3 故意不 finish：保持「进行中」状态用于演示
+
+    # 演示缺陷：覆盖 打开 / 修复中 / 已解决 / 已关闭 全状态，与用例、测试单双向关联
+    result_word = {"失败": "回归失败", "阻塞": "执行受阻"}
+    for row, severity, status in defect_sources:
+        word = result_word.get(row.get("result"), row.get("result") or "测试失败")
+        did = create_defect(
+            title=f"[{row['module']}] {row['title']} {word}",
+            module=row["module"], severity=severity,
+            description=f"来源：{'每日冒烟测试' if '角标' in row['title'] else '登录模块回归测试'}；"
+                        f"{row.get('note') or '详见执行明细'}",
+            source_case_id=row["case_id"])
+        if status != "打开":
+            update_defect(did, status=status)
 
 
 def clear_all() -> None:

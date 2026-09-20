@@ -6,11 +6,13 @@ import streamlit as st
 
 import store
 from styles import (DANGER, DEFECT_STATUS_COLORS, PRIMARY, SEVERITY_COLORS,
-                    SUCCESS, WARNING, kpi_card, page_header, pill_styler)
+                    SUCCESS, WARNING, guide_steps, kpi_card, page_header,
+                    pill_styler)
 
 
 def render() -> None:
     page_header("缺陷管理", "失败问题全程跟踪：登记 → 修复 → 验证关闭，与用例 / 测试单双向关联")
+    guide_steps(["从报告页或手工登记缺陷", "跟进修复流转状态", "回归验证后关闭"])
 
     _kpi_band()
     defects = _toolbar_and_query()
