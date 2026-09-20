@@ -6,3 +6,6 @@ results/
 *.egg-info/
 .venv/
 venv/
+data/*.db
+data/*.db-wal
+data/*.db-shm

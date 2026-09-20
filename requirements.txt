@@ -1,3 +1,6 @@
 pytest>=7.0
 openai>=1.0
-streamlit>=1.40
+streamlit>=1.40,<2
+plotly>=5.20
+openpyxl>=3.1
+pandas>=2.0,<3
