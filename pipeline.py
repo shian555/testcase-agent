@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import io
 from dataclasses import asdict
 from pathlib import Path
 
@@ -16,11 +17,8 @@ def run(analyzer: AnalyzerAgent, generator: GeneratorAgent, reviewer: ReviewerAg
     return points, cases, review
 
 
-def export(points, cases, review: Review, outdir) -> None:
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    # Markdown 报告
+def report_markdown(points, cases, review: Review) -> str:
+    """渲染 Markdown 报告文本（CLI 写文件与网页下载共用同一份渲染逻辑）。"""
     lines = ["# AI 测试用例生成报告", ""]
     lines.append(f"- 测试点：{len(points)} 个")
     lines.append(f"- 测试用例：{len(cases)} 条")
@@ -40,12 +38,24 @@ def export(points, cases, review: Review, outdir) -> None:
     for c in cases:
         steps = c.steps.replace("\n", "<br>")
         lines.append(f"| {c.id} | {c.module} | {c.title} | {c.method} | {c.priority} | {c.precondition} | {steps} | {c.expected} |")
-    (outdir / "report.md").write_text("\n".join(lines), encoding="utf-8")
+    return "\n".join(lines)
 
+
+def cases_csv(cases) -> str:
+    """渲染 CSV 文本（utf-8-sig 由写文件方再加，避免 Excel 打开乱码）。"""
+    buf = io.StringIO()
+    fields = ["id", "module", "title", "method", "priority", "precondition", "steps", "expected", "testpoint_id"]
+    w = csv.DictWriter(buf, fieldnames=fields)
+    w.writeheader()
+    for c in cases:
+        w.writerow({k: v for k, v in asdict(c).items() if k in fields})
+    return buf.getvalue()
+
+
+def export(points, cases, review: Review, outdir) -> None:
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    (outdir / "report.md").write_text(report_markdown(points, cases, review), encoding="utf-8")
     # CSV（utf-8-sig 让 Excel 直接打开不乱码）
-    with open(outdir / "test_cases.csv", "w", newline="", encoding="utf-8-sig") as f:
-        fields = ["id", "module", "title", "method", "priority", "precondition", "steps", "expected", "testpoint_id"]
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-        for c in cases:
-            w.writerow({k: v for k, v in asdict(c).items() if k in fields})
+    (outdir / "test_cases.csv").write_text(cases_csv(cases), encoding="utf-8-sig")

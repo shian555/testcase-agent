@@ -1,0 +1,7 @@
+# Streamlit 主题：本地与 Streamlit Cloud 展示一致
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+
+[browser]
+gatherUsageStats = false
