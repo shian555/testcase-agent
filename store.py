@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS test_runs (
     env         TEXT DEFAULT '测试环境',
     status      TEXT NOT NULL DEFAULT 'in_progress', -- in_progress | done
     note        TEXT DEFAULT '',
+    owner       TEXT DEFAULT '',                     -- 执行人
     created_at  TEXT NOT NULL,
     finished_at TEXT
 );
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS defects (
     description    TEXT DEFAULT '',
     source_case_id TEXT DEFAULT '',          -- 来源失败用例（缺陷 ↔ 用例双向追溯）
     run_id         INTEGER,                  -- 发现于哪个测试单
+    assignee       TEXT DEFAULT '',          -- 当前处理人（开发/测试）
     created_at     TEXT NOT NULL,
     updated_at     TEXT NOT NULL
 );
@@ -108,10 +110,20 @@ def _init_db() -> None:
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(_SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()
     _init_done.set()
+
+
+def _migrate(conn) -> None:
+    """老库平滑升级：缺失列按默认值补齐（幂等，老数据不受影响）。"""
+    for table, col, ddl in (("test_runs", "owner", "TEXT DEFAULT ''"),
+                            ("defects", "assignee", "TEXT DEFAULT ''")):
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
 
 
 @contextmanager
@@ -302,14 +314,14 @@ def delete_cases(case_ids: list[str]) -> None:
 # ---------------- 测试单 / 执行结果 ----------------
 
 def create_run(*, name: str, env: str = "测试环境", note: str = "",
-               case_ids: list[str]) -> int:
+               owner: str = "", case_ids: list[str]) -> int:
     if not case_ids:
         raise ValueError("测试单至少需要圈选一条用例")
     now = _now()
     with _db() as conn:
         cur = conn.execute(
-            "INSERT INTO test_runs(name, env, note, created_at) VALUES (?,?,?,?)",
-            (name, env, note, now))
+            "INSERT INTO test_runs(name, env, note, owner, created_at) VALUES (?,?,?,?,?)",
+            (name, env, note, owner.strip(), now))
         run_id = int(cur.lastrowid)
         conn.executemany(
             "INSERT INTO run_results(run_id, case_id, result, updated_at) VALUES (?,?,?,?)",
@@ -406,7 +418,7 @@ def _next_defect_id(conn) -> str:
 
 def create_defect(*, title: str, module: str = "", severity: str = "一般",
                   description: str = "", source_case_id: str = "",
-                  run_id: int | None = None) -> str:
+                  run_id: int | None = None, assignee: str = "") -> str:
     """登记缺陷；来源用例/测试单可选，形成 缺陷 ↔ 用例 追溯。"""
     now = _now()
     if severity not in _SEVERITIES:
@@ -415,9 +427,10 @@ def create_defect(*, title: str, module: str = "", severity: str = "一般",
         did = _next_defect_id(conn)
         conn.execute(
             "INSERT INTO defects(id, title, module, severity, status, description,"
-            " source_case_id, run_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " source_case_id, run_id, assignee, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (did, title, module, severity, "打开", description, source_case_id,
-             run_id, now, now))
+             run_id, assignee.strip(), now, now))
         _bump(conn)
     return did
 
@@ -451,8 +464,9 @@ def get_defect(defect_id: str) -> dict | None:
 
 
 def update_defect(defect_id: str, *, status: str | None = None, severity: str | None = None,
-                  title: str | None = None, description: str | None = None) -> None:
-    """白名单字段更新（状态流转 / 信息修正）。"""
+                  title: str | None = None, description: str | None = None,
+                  assignee: str | None = None) -> None:
+    """白名单字段更新（状态流转 / 信息修正 / 指派处理人）。"""
     cols: dict = {}
     if status and status in _DEFECT_STATUSES:
         cols["status"] = status
@@ -462,6 +476,8 @@ def update_defect(defect_id: str, *, status: str | None = None, severity: str | 
         cols["title"] = title
     if description is not None:
         cols["description"] = description
+    if assignee is not None:
+        cols["assignee"] = assignee.strip()
     if not cols:
         return
     sets = ", ".join(f"{k}=?" for k in cols)
@@ -541,6 +557,24 @@ def trend_last_runs(n: int = 10) -> list[dict]:
             for r in reversed(done)]
 
 
+def module_quality() -> list[dict]:
+    """各模块在已完成测试单中的通过情况（工作台模块质量图数据源）。"""
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT c.module AS module,"
+            " SUM(rr.result = '通过') AS passed,"
+            " SUM(rr.result != '未执行') AS executed"
+            " FROM run_results rr"
+            " JOIN cases c ON c.id = rr.case_id"
+            " JOIN test_runs r ON r.id = rr.run_id"
+            " WHERE r.status = 'done'"
+            " GROUP BY c.module ORDER BY executed DESC").fetchall()
+    return [{"module": r["module"], "passed": r["passed"] or 0,
+             "executed": r["executed"] or 0,
+             "rate": round((r["passed"] or 0) / r["executed"], 4) if r["executed"] else 0.0}
+            for r in rows]
+
+
 # ---------------- 演示数据 / 清空 ----------------
 
 def seed_demo() -> None:
@@ -603,10 +637,10 @@ def seed_demo() -> None:
         return
 
     # ① 登录模块回归（已完成 · 通过率 78.8%）：确定性铺真实感结果分布
-    defect_sources: list[tuple[dict, str, str]] = []  # (执行行, 严重程度, 备注)
+    defect_sources: list[tuple[dict, str, str]] = []  # (执行行, 严重程度, 状态)
     if login_ids:
         run1 = create_run(name="登录模块回归测试", env="测试环境",
-                          note="v2.4.0 发布前回归", case_ids=login_ids)
+                          note="v2.4.0 发布前回归", owner="陈曦", case_ids=login_ids)
         for i, cid in enumerate(login_ids):
             if i % 11 == 3:
                 set_result(run1, cid, "失败", "实际未给出校验提示，已提缺陷")
@@ -633,7 +667,8 @@ def seed_demo() -> None:
     p0_cases = list_cases(priority=["P0"], status="active")[:10]
     if p0_cases:
         run2 = create_run(name="每日冒烟测试", env="测试环境",
-                          note="每日构建后圈选 P0 用例", case_ids=[c["id"] for c in p0_cases])
+                          note="每日构建后圈选 P0 用例", owner="李梅",
+                          case_ids=[c["id"] for c in p0_cases])
         smoke_fail = None
         for c in p0_cases:
             if "角标" in c["title"]:
@@ -653,7 +688,7 @@ def seed_demo() -> None:
     func_ids = manual_ids + (login_ids[-4:] if login_ids else [])
     if func_ids:
         run3 = create_run(name="注册与购物车功能测试", env="预发环境",
-                          note="迭代 2410 功能验证", case_ids=func_ids)
+                          note="迭代 2410 功能验证", owner="张涛", case_ids=func_ids)
         for i, cid in enumerate(func_ids[:5]):
             set_result(run3, cid, "失败" if i == 3 else "通过",
                        "提示文案含糊，待产品确认口径" if i == 3 else "")
@@ -668,7 +703,8 @@ def seed_demo() -> None:
             module=row["module"], severity=severity,
             description=f"来源：{'每日冒烟测试' if '角标' in row['title'] else '登录模块回归测试'}；"
                         f"{row.get('note') or '详见执行明细'}",
-            source_case_id=row["case_id"])
+            source_case_id=row["case_id"],
+            assignee="王皓" if status == "已关闭" else "刘畅")
         if status != "打开":
             update_defect(did, status=status)
 

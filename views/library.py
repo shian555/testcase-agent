@@ -9,7 +9,8 @@ import streamlit as st
 from excel_export import library_workbook
 from methods import METHODS
 import store
-from styles import guide_steps, page_header, priority_styler
+from styles import (DANGER, PRIMARY, guide_steps, kpi_card, page_header,
+                    priority_styler)
 
 
 @st.cache_data(show_spinner=False)
@@ -22,6 +23,7 @@ def render() -> None:
     page_header("用例库", "团队测试资产：检索筛选、圈选建单、编辑维护")
     guide_steps(["筛选或导入用例", "勾选圈选目标用例", "批量新建测试单 / 维护"])
 
+    _asset_overview()
     cases = _toolbar_and_query()
     if not cases:
         st.info("用例库为空。先去「用例生成」采纳 AI 产出，或在下方新建手工用例。")
@@ -33,9 +35,29 @@ def render() -> None:
     if selected_ids:
         _batch_actions(selected_ids)
 
-    _case_detail(cases)
-    _new_case_expander()
-    _import_expander()
+    # 维护区三列收拢：新建 / 导入 / 详情编辑 各占一列，页面不再纵向拖长
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        _new_case_expander()
+    with c2:
+        _import_expander()
+    with c3:
+        _case_detail(cases)
+
+
+def _asset_overview() -> None:
+    """资产概览：启用 / P0 / AI / 手工 / 停用 五张小指标卡。"""
+    all_cases = store.list_cases(status="all")
+    active = [c for c in all_cases if c["status"] == "active"]
+    stats = [("用例总数（启用）", len(active), PRIMARY),
+             ("P0 核心用例", sum(1 for c in active if c["priority"] == "P0"), DANGER),
+             ("AI 生成", sum(1 for c in active if c["source"] == "ai"), "#2563EB"),
+             ("手工创建", sum(1 for c in active if c["source"] == "manual"), "#64748B"),
+             ("已停用", len(all_cases) - len(active), "#94A3B8")]
+    cols = st.columns(5)
+    for col, (label, value, accent) in zip(cols, stats):
+        with col:
+            kpi_card(label, value, accent=accent)
 
 
 def _toolbar_and_query() -> list[dict]:
@@ -102,48 +124,50 @@ def _batch_actions(ids: list[str]) -> None:
 
 
 def _case_detail(cases: list[dict]) -> None:
-    st.subheader("用例详情与编辑")
-    options = [f'{c["id"]} · {c["title"]}' for c in cases]
-    pick = st.selectbox("定位用例", options, key="lib_pick", index=None,
-                        placeholder="选择一条用例查看 / 编辑")
-    if pick is None:
-        return
-    case = cases[options.index(pick)]
+    with st.expander("🔍 用例详情与编辑", expanded=False):
+        options = [f'{c["id"]} · {c["title"]}' for c in cases]
+        pick = st.selectbox("定位用例", options, key="lib_pick", index=None,
+                            placeholder="选择一条用例查看 / 编辑",
+                            label_visibility="collapsed")
+        if pick is None:
+            st.caption("从下拉框选择用例后，可在此查看详情并编辑。")
+            return
+        case = cases[options.index(pick)]
 
-    d1, d2 = st.columns([1, 1.4], gap="medium")
-    with d1:
-        meta = (f'<div class="banner"><div class="t">{case["id"]} · {case["title"]}</div>'
-                f'<div class="d">模块：{case["module"]} ｜ 方法：{case["method"]} ｜ '
-                f'来源：{"AI" if case["source"] == "ai" else "手工"}'
-                + (f' ｜ 标签：{case["tags"]}' if case["tags"] else "") + "<br>"
-                f'前置条件：{case["precondition"] or "—"}</div></div>')
-        st.markdown(meta, unsafe_allow_html=True)
-        st.markdown("**步骤**\n" + case["steps"].replace("\n", "  \n"))
-        st.markdown("**预期结果**\n" + (case["expected"] or "—"))
-        if case["testpoint_id"]:
-            st.caption(f"🔗 追溯测试点：{case['testpoint_id']}")
+        d1, d2 = st.columns([1, 1.4], gap="medium")
+        with d1:
+            meta = (f'<div class="banner"><div class="t">{case["id"]} · {case["title"]}</div>'
+                    f'<div class="d">模块：{case["module"]} ｜ 方法：{case["method"]} ｜ '
+                    f'来源：{"AI" if case["source"] == "ai" else "手工"}'
+                    + (f' ｜ 标签：{case["tags"]}' if case["tags"] else "") + "<br>"
+                    f'前置条件：{case["precondition"] or "—"}</div></div>')
+            st.markdown(meta, unsafe_allow_html=True)
+            st.markdown("**步骤**\n" + case["steps"].replace("\n", "  \n"))
+            st.markdown("**预期结果**\n" + (case["expected"] or "—"))
+            if case["testpoint_id"]:
+                st.caption(f"🔗 追溯测试点：{case['testpoint_id']}")
 
-    with d2:
-        with st.form(f"edit_{case['id']}", border=True):
-            st.markdown("**编辑用例**")
-            t1, t2 = st.columns(2)
-            title = t1.text_input("标题", value=case["title"])
-            module = t2.text_input("模块", value=case["module"])
-            t3, t4, t5 = st.columns(3)
-            priority = t3.selectbox("优先级", ["P0", "P1", "P2"],
-                                    index=["P0", "P1", "P2"].index(case["priority"]))
-            method = t4.selectbox("方法", list(METHODS) + ["手工"],
-                                  index=(list(METHODS) + ["手工"]).index(case["method"]))
-            tags = t5.text_input("标签（逗号分隔）", value=case["tags"])
-            precondition = st.text_area("前置条件", value=case["precondition"])
-            steps = st.text_area("步骤（每行一步）", value=case["steps"], height=140)
-            expected = st.text_area("预期结果", value=case["expected"], height=90)
-            if st.form_submit_button("💾 保存修改", type="primary", use_container_width=True):
-                store.update_case(case["id"], title=title, module=module, priority=priority,
-                                  method=method, tags=tags.strip(), precondition=precondition,
-                                  steps=steps, expected=expected)
-                st.toast(f"{case['id']} 已保存")
-                st.rerun()
+        with d2:
+            with st.form(f"edit_{case['id']}", border=True):
+                st.markdown("**编辑用例**")
+                t1, t2 = st.columns(2)
+                title = t1.text_input("标题", value=case["title"])
+                module = t2.text_input("模块", value=case["module"])
+                t3, t4, t5 = st.columns(3)
+                priority = t3.selectbox("优先级", ["P0", "P1", "P2"],
+                                        index=["P0", "P1", "P2"].index(case["priority"]))
+                method = t4.selectbox("方法", list(METHODS) + ["手工"],
+                                      index=(list(METHODS) + ["手工"]).index(case["method"]))
+                tags = t5.text_input("标签（逗号分隔）", value=case["tags"])
+                precondition = st.text_area("前置条件", value=case["precondition"])
+                steps = st.text_area("步骤（每行一步）", value=case["steps"], height=140)
+                expected = st.text_area("预期结果", value=case["expected"], height=90)
+                if st.form_submit_button("💾 保存修改", type="primary", use_container_width=True):
+                    store.update_case(case["id"], title=title, module=module, priority=priority,
+                                      method=method, tags=tags.strip(), precondition=precondition,
+                                      steps=steps, expected=expected)
+                    st.toast(f"{case['id']} 已保存")
+                    st.rerun()
 
 
 def _new_case_expander() -> None:

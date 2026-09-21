@@ -20,7 +20,11 @@ def _export_run_excel(version: int, run_id: int) -> bytes:
     run = store.get_run(run_id)
     if run is None:
         return b""
-    return run_report_workbook(run, store.run_cases(run_id))
+    links: dict[str, list[str]] = {}
+    for d in store.list_defects():
+        if d["source_case_id"]:
+            links.setdefault(d["source_case_id"], []).append(f'{d["id"]}（{d["status"]}）')
+    return run_report_workbook(run, store.run_cases(run_id), links)
 
 
 def render() -> None:
@@ -67,16 +71,17 @@ def _create_run_expander(runs: list[dict]) -> None:
         chosen_ids = [r["ID"] for _, r in sel.iterrows() if r["选择"]]
         st.caption(f"已圈选 **{len(chosen_ids)}** 条用例")
 
-        t1, t2, t3 = st.columns([2, 1, 1.4])
+        t1, t2, t3, t4 = st.columns([2, 1, 1.1, 1.3])
         name = t1.text_input("测试单名称*", value=f"回归 {datetime.now():%m-%d %H:%M}", key="mk_name")
         env = t2.selectbox("环境", ["测试环境", "预发环境", "生产环境"], key="mk_env")
-        note = t3.text_input("备注", key="mk_note")
+        owner = t3.text_input("执行人", key="mk_owner", placeholder="如：陈曦")
+        note = t4.text_input("备注", key="mk_note")
         st.button("创建测试单", type="primary",
                   disabled=not (name.strip() and chosen_ids), use_container_width=True,
                   key="mk_submit", help="至少填写名称并圈选用例")
         if st.session_state.get("mk_submit"):
             run_id = store.create_run(name=name.strip(), env=env, note=note.strip(),
-                                      case_ids=chosen_ids)
+                                      owner=owner.strip(), case_ids=chosen_ids)
             st.toast(f"测试单 RUN-{run_id:04d} 已创建")
             st.rerun()
 
@@ -100,7 +105,8 @@ def _pick_run(runs: list[dict]) -> dict:
 def _run_panel(run: dict) -> None:
     rid = run["id"]
     st.subheader(f"RUN-{rid:04d} · {run['name']}")
-    st.caption(f"环境：{run['env']} ｜ 状态：{'进行中' if run['status'] == 'in_progress' else '已完成'}"
+    st.caption(f"环境：{run['env']} ｜ 执行人：{run['owner'] or '—'}"
+               f" ｜ 状态：{'进行中' if run['status'] == 'in_progress' else '已完成'}"
                f" ｜ 创建：{run['created_at']}" + (f" ｜ 备注：{run['note']}" if run["note"] else ""))
 
     total = run["total"]
@@ -120,6 +126,10 @@ def _run_panel(run: dict) -> None:
     rows = store.run_cases(rid)
     df = pd.DataFrame([{"用例ID": r["case_id"], "标题": r["title"], "优先级": r["priority"],
                         "结果": r["result"], "备注": r["note"]} for r in rows])
+    f1, f2 = st.columns([1, 3])
+    result_filter = f1.selectbox("只看结果", ["全部", *_RESULTS], key="res_filter")
+    if result_filter != "全部":
+        df = df[df["结果"] == result_filter]
     ed = st.data_editor(df, key=f"editor_{rid}", hide_index=True, width="stretch", height=420,
                         column_config={
                             "用例ID": st.column_config.TextColumn("用例ID", disabled=True, width="small"),
@@ -130,7 +140,7 @@ def _run_panel(run: dict) -> None:
                             "备注": st.column_config.TextColumn("备注（失败原因 / 缺陷号）", width="large"),
                         })
 
-    c1, c2, c3 = st.columns([1.4, 1.2, 1.6])
+    c1, c2, c3, c4 = st.columns([1.4, 1.2, 1.2, 1.4])
     c1.button("💾 保存执行结果", type="primary", use_container_width=True, key="save_results")
     if st.session_state.get("save_results"):
         for _, r in ed.iterrows():
@@ -138,8 +148,21 @@ def _run_panel(run: dict) -> None:
         st.toast("执行结果已保存")
         st.rerun()
 
+    with c2.popover("⚡ 批量置为通过", use_container_width=True,
+                    disabled=run["pending"] == 0,
+                    help=run["pending"] == 0 and "没有未执行用例" or None):
+        st.warning(f"将把 **{run['pending']}** 条「未执行」用例一次性置为「通过」，"
+                   "适用于冒烟快速放行等场景，请确认剩余用例确实无需逐条执行。")
+        if st.checkbox("我确认批量通过", key="bulk_pass_confirm") and st.button(
+                "确认批量通过", type="primary", use_container_width=True):
+            for r in rows:
+                if r["result"] == "未执行":
+                    store.set_result(rid, r["case_id"], "通过", "批量置为通过")
+            st.toast(f"已批量通过 {run['pending']} 条")
+            st.rerun()
+
     done_disabled = run["pending"] > 0 or run["status"] == "done"
-    c2.button("✅ 标记完成", disabled=done_disabled, use_container_width=True,
+    c3.button("✅ 标记完成", disabled=done_disabled, use_container_width=True,
               key="finish_run",
               help="全部用例执行完毕后可标记完成" if done_disabled else None)
     if st.session_state.get("finish_run"):
@@ -147,7 +170,7 @@ def _run_panel(run: dict) -> None:
         st.toast(f"RUN-{rid:04d} 已标记完成")
         st.rerun()
 
-    c3.download_button("⬇️ 导出执行报表（Excel）", use_container_width=True,
+    c4.download_button("⬇️ 导出执行报表（Excel）", use_container_width=True,
                        data=_export_run_excel(store.version(), rid),
                        file_name=f"RUN-{rid:04d}_执行报表.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

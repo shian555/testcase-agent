@@ -27,10 +27,15 @@ def render() -> None:
         st.warning("该测试单没有用例（相关用例可能已被删除）。")
         return
 
-    _kpi_band(run)
+    st.caption(f"环境：{run['env']} ｜ 执行人：{run['owner'] or '—'}"
+               f" ｜ 创建：{run['created_at']}"
+               + (f" ｜ 备注：{run['note']}" if run["note"] else ""))
+
+    _kpi_band(run, runs)
     _conclusion(run, rows)
     _charts(run, rows)
     _issue_list(run, rows)
+    _traceability(run, rows)
     _exports(run)
 
 
@@ -48,7 +53,14 @@ def _pick_run(runs: list[dict]) -> dict:
     return runs[idx]
 
 
-def _kpi_band(run: dict) -> None:
+def _kpi_band(run: dict, runs: list[dict]) -> None:
+    # 环比：与上一个已完成的测试单比较通过率
+    prev = next((r for r in runs if r["status"] == "done" and r["id"] < run["id"]), None)
+    delta = ""
+    if prev and run["executed"]:
+        diff = run["pass_rate"] - prev["pass_rate"]
+        arrow = "↗" if diff >= 0 else "↘"
+        delta = f"{arrow} 较 RUN-{prev['id']:04d} {diff:+.1%}"
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
         kpi_card("用例总数", run["total"], f"已执行 {run['executed']} 条")
@@ -62,7 +74,7 @@ def _kpi_band(run: dict) -> None:
         kpi_card("未执行", run["pending"], accent="#64748B")
     with c6:
         rate = f"{run['pass_rate']:.1%}" if run["executed"] else "—"
-        kpi_card("通过率", rate, accent=SUCCESS if run["pass_rate"] >= 0.9 else WARNING)
+        kpi_card("通过率", rate, delta, accent=SUCCESS if run["pass_rate"] >= 0.9 else WARNING)
 
 
 def _conclusion(run: dict, rows: list[dict]) -> None:
@@ -170,13 +182,35 @@ def _issue_list(run: dict, rows: list[dict]) -> None:
             st.rerun()
 
 
+def _defect_links() -> dict[str, list[str]]:
+    """case_id → 关联缺陷标签列表（追溯矩阵与 Excel 导出共用）。"""
+    links: dict[str, list[str]] = {}
+    for d in store.list_defects():
+        if d["source_case_id"]:
+            links.setdefault(d["source_case_id"], []).append(f'{d["id"]}（{d["status"]}）')
+    return links
+
+
+def _traceability(run: dict, rows: list[dict]) -> None:
+    """用例追溯矩阵：每条用例的执行结果与关联缺陷，需求 → 用例 → 结果 → 缺陷全链路。"""
+    links = _defect_links()
+    st.markdown("##### 用例追溯矩阵")
+    with st.expander(f"展开查看 {len(rows)} 条用例的「结果 × 关联缺陷」对照"):
+        df = pd.DataFrame([{"用例ID": r["case_id"], "模块": r["module"], "标题": r["title"],
+                            "优先级": r["priority"], "结果": r["result"],
+                            "关联缺陷": "、".join(links.get(r["case_id"], [])) or "—"}
+                           for r in rows])
+        st.dataframe(result_styler(df, "结果"), width="stretch", hide_index=True, height=380)
+        st.caption("追溯链路：需求（PRD/批次）→ 用例 → 执行结果 → 缺陷；可在下方 Excel 报表中导出归档。")
+
+
 @st.cache_data(show_spinner=False)
 def _export_run_excel(version: int, run_id: int) -> bytes:
     """执行报表 Excel：version 作为缓存盐，数据未变时零重建。"""
     run = store.get_run(run_id)
     if run is None:
         return b""
-    return run_report_workbook(run, store.run_cases(run_id))
+    return run_report_workbook(run, store.run_cases(run_id), _defect_links())
 
 
 @st.cache_data(show_spinner=False)

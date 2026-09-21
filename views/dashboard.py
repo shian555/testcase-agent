@@ -92,17 +92,36 @@ def _charts() -> None:
         else:
             st.info("暂无用例")
 
-    st.markdown("##### 测试单通过率趋势（最近完成）")
-    trend = store.trend_last_runs(10)
-    if trend:
-        df = pd.DataFrame([{"测试单": t["run"], "通过率": t["pass_rate"]} for t in trend])
-        fig = style_chart(px.line(df, x="测试单", y="通过率", markers=True), height=280,
-                          legend=None)
-        fig.update_layout(yaxis_tickformat=".0%", yaxis_range=[0, 1.05])
-        st.plotly_chart(fig, use_container_width=True, key="dash_trend",
-                        config=PLOTLY_CONFIG)
-    else:
-        st.caption("还没有已完成的测试单，通过率趋势将在完成首轮执行后呈现。")
+    c3, c4 = st.columns(2, gap="medium")
+    with c3:
+        st.markdown("##### 模块通过率（已完成测试单）")
+        quality = store.module_quality()
+        if quality:
+            df = pd.DataFrame([{"模块": q["module"], "通过率": q["rate"],
+                                "明细": f"{q['passed']}/{q['executed']}"}
+                               for q in sorted(quality, key=lambda x: x["rate"])])
+            fig = style_chart(px.bar(df, x="通过率", y="模块", orientation="h",
+                                     text="明细", color_discrete_sequence=[PRIMARY]),
+                              height=300, legend=None)
+            fig.update_layout(xaxis_tickformat=".0%", xaxis_range=[0, 1.05])
+            st.plotly_chart(fig, use_container_width=True, key="dash_quality",
+                            config=PLOTLY_CONFIG)
+        else:
+            st.caption("还没有已完成的测试单，模块通过率将在完成首轮执行后呈现。")
+
+    with c4:
+        st.markdown("##### 测试单通过率趋势（最近完成）")
+        trend = store.trend_last_runs(10)
+        if trend:
+            df = pd.DataFrame([{"测试单": t["run"], "通过率": t["pass_rate"]} for t in trend])
+            fig = style_chart(px.line(df, x="测试单", y="通过率", markers=True), height=300,
+                              legend=None)
+            fig.update_layout(yaxis_tickformat=".0%", yaxis_range=[0, 1.05],
+                              margin=dict(r=34))  # 末端数据点贴右缘，留出 x 轴标签宽度
+            st.plotly_chart(fig, use_container_width=True, key="dash_trend",
+                            config=PLOTLY_CONFIG)
+        else:
+            st.caption("还没有已完成的测试单，通过率趋势将在完成首轮执行后呈现。")
 
 
 def _recent_runs() -> None:
@@ -113,6 +132,7 @@ def _recent_runs() -> None:
         return
     df = pd.DataFrame([{
         "测试单": f"RUN-{r['id']:04d}", "名称": r["name"], "环境": r["env"],
+        "执行人": r["owner"] or "—",
         "状态": "🟢 进行中" if r["status"] == "in_progress" else "✅ 已完成",
         "进度": (r["executed"] / r["total"] * 100) if r["total"] else 0,
         "通过率": f"{r['pass_rate']:.1%}" if r["executed"] else "—",

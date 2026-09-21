@@ -71,7 +71,8 @@ def test_adopt_batch_and_dedup(tmp_db):
 
 def test_run_lifecycle_and_stats(tmp_db):
     ids = [_case(f"用例{i}") for i in range(4)]
-    run_id = store.create_run(name="回归", case_ids=ids)
+    run_id = store.create_run(name="回归", owner="陈曦", case_ids=ids)
+    assert store.get_run(run_id)["owner"] == "陈曦"
     stats = store.run_stats(run_id)
     assert stats["total"] == 4 and stats["pending"] == 4 and stats["pass_rate"] == 0.0
 
@@ -88,6 +89,8 @@ def test_run_lifecycle_and_stats(tmp_db):
     runs = store.list_runs()
     assert runs[0]["status"] == "done" and runs[0]["name"] == "回归"
     assert store.trend_last_runs(5)[0]["pass_rate"] == round(2 / 3, 4)
+    quality = store.module_quality()
+    assert quality and quality[0]["executed"] == 3  # 模块质量：已完成单的已执行用例
 
     store.delete_run(run_id)
     assert store.get_run(run_id) is None
@@ -111,11 +114,14 @@ def test_seed_demo_and_clear(tmp_db):
     assert len(runs) == 3 and sum(r["status"] == "done" for r in runs) == 2
     assert runs[0]["status"] == "in_progress"  # 功能测试保持执行中间态
     assert all(r["passed"] > 0 for r in runs if r["status"] == "done")
+    assert all(r["owner"] for r in runs)  # 每张演示单都有执行人
 
-    # 缺陷覆盖 打开 / 修复中 / 已解决 / 已关闭 全状态
+    # 缺陷覆盖 打开 / 修复中 / 已解决 / 已关闭 全状态，且都有处理人
     stats = store.defect_stats()
     assert (stats["total"], stats["打开"], stats["修复中"],
             stats["已解决"], stats["已关闭"]) == (5, 2, 1, 1, 1)
+    assert all(d["assignee"] for d in store.list_defects())
+    assert store.module_quality()  # 模块质量统计就绪
 
     kpi = store.kpi_snapshot()
     assert kpi["cases_total"] == len(cases) and kpi["last_pass_rate"] is not None
@@ -134,18 +140,23 @@ def test_defect_crud_and_flow(tmp_db):
     v0 = store.version()
     did = store.create_defect(title="[登录] 验证码为空仍可提交", module="登录",
                               severity="严重", description="实际可提交",
-                              source_case_id=cid, run_id=None)
+                              source_case_id=cid, run_id=None, assignee="刘畅")
     assert did == "BUG0001"
     assert store.version() == v0 + 1  # 写操作推进数据版本（导出缓存盐）
 
     got = store.get_defect(did)
     assert got["status"] == "打开" and got["severity"] == "严重"
-    assert got["source_case_id"] == cid
+    assert got["source_case_id"] == cid and got["assignee"] == "刘畅"
 
-    # 状态流转：打开 → 修复中 → 已解决 → 已关闭；非法值被拒
+    # 状态流转：打开 → 修复中 → 已解决 → 已关闭；非法值被拒；处理人可改派
     for status in ("修复中", "已解决", "已关闭"):
         store.update_defect(did, status=status)
         assert store.get_defect(did)["status"] == status
+    store.update_defect(did, status="不存在的状态")
+    assert store.get_defect(did)["status"] == "已关闭"
+    store.update_defect(did, severity="轻微", assignee="王皓")
+    got = store.get_defect(did)
+    assert got["severity"] == "轻微" and got["assignee"] == "王皓"
     store.update_defect(did, status="不存在的状态")
     assert store.get_defect(did)["status"] == "已关闭"
     store.update_defect(did, severity="轻微")

@@ -64,7 +64,7 @@ def _toolbar_and_query() -> list[dict]:
 
 def _defect_table(defects: list[dict]) -> list[str]:
     rows = [{"ID": d["id"], "标题": d["title"], "模块": d["module"],
-             "严重程度": d["severity"], "状态": d["status"],
+             "严重程度": d["severity"], "状态": d["status"], "处理人": d["assignee"] or "—",
              "来源用例": d["source_case_id"] or "—", "创建时间": d["created_at"]}
             for d in defects]
     df = pd.DataFrame(rows)
@@ -80,9 +80,12 @@ def _actions(ids: list[str]) -> None:
     with a1.popover(f"🔄 状态流转（已选 {len(ids)} 条）", use_container_width=True):
         st.caption("打开 → 修复中 → 已解决 → 已关闭；验证不通过可重新打开。")
         new_status = st.selectbox("目标状态", list(store._DEFECT_STATUSES), key="def_flow")
+        new_assignee = st.text_input("处理人（可选，批量指派）", key="def_flow_assignee",
+                                     placeholder="如：刘畅")
         if st.button("确认流转", type="primary", use_container_width=True):
             for did in ids:
-                store.update_defect(did, status=new_status)
+                store.update_defect(did, status=new_status,
+                                    assignee=new_assignee.strip() or None)
             st.toast(f"已把 {len(ids)} 条缺陷置为「{new_status}」")
             st.rerun()
     with a2.popover(f"🗑 删除（已选 {len(ids)} 条）", use_container_width=True):
@@ -118,8 +121,7 @@ def _create_from_failure() -> None:
             pick = st.selectbox("失败用例", options, key="def_failure_pick")
             c1, c2 = st.columns(2)
             severity = c1.selectbox("严重程度", list(store._SEVERITIES), index=1)
-            c2.markdown(f"<br><span style='color:#64748B;font-size:.85rem'>"
-                        f"模块自动带出，可到列表中修改</span>", unsafe_allow_html=True)
+            assignee = c2.text_input("处理人", key="def_assignee", placeholder="如：刘畅")
             description = st.text_area("缺陷描述（复现步骤 / 实际 vs 预期）",
                                        height=90, key="def_desc")
             submitted = st.form_submit_button("登记缺陷", type="primary",
@@ -130,7 +132,8 @@ def _create_from_failure() -> None:
                 title=f"[{r['module']}] {r['title']}",
                 module=r["module"], severity=severity,
                 description=description.strip() or f"来源：RUN-{run['id']:04d} 执行「{r['result']}」；{r['note'] or ''}",
-                source_case_id=r["case_id"], run_id=run["id"])
+                source_case_id=r["case_id"], run_id=run["id"],
+                assignee=assignee.strip())
             st.toast(f"缺陷 {did} 已登记")
             st.rerun()
 
@@ -143,8 +146,8 @@ def _new_defect_expander() -> None:
             module = t2.text_input("模块", placeholder="如：登录")
             c1, c2 = st.columns(2)
             severity = c1.selectbox("严重程度", list(store._SEVERITIES), index=1)
-            c2.markdown("<span style='color:#64748B;font-size:.85rem'>"
-                        "新缺陷默认为「打开」状态</span>", unsafe_allow_html=True)
+            assignee = c2.text_input("处理人", key="def_manual_assignee",
+                                     placeholder="如：刘畅")
             description = st.text_area("描述", height=90, key="def_manual_desc")
             submitted = st.form_submit_button("创建缺陷", type="primary",
                                               use_container_width=True)
@@ -153,6 +156,7 @@ def _new_defect_expander() -> None:
                 st.error("标题为必填项")
             else:
                 did = store.create_defect(title=title.strip(), module=module.strip(),
-                                          severity=severity, description=description.strip())
+                                          severity=severity, description=description.strip(),
+                                          assignee=assignee.strip())
                 st.toast(f"缺陷 {did} 已创建")
                 st.rerun()

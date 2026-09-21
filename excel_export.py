@@ -103,15 +103,17 @@ def library_workbook(cases: list[dict]) -> bytes:
     return _wb_bytes(wb)
 
 
-def run_report_workbook(run: dict, rows: list[dict]) -> bytes:
-    """执行报表：执行汇总 / 执行明细 / 问题清单（失败 + 阻塞）。"""
+def run_report_workbook(run: dict, rows: list[dict],
+                        defect_links: dict[str, list[str]] | None = None) -> bytes:
+    """执行报表：执行汇总 / 执行明细 / 问题清单 / 追溯矩阵（失败 + 阻塞）。"""
     wb = Workbook()
     wb.remove(wb.active)
 
     executed = run["executed"]
     summary = [
         ["测试单", f"RUN-{run['id']:04d}"], ["名称", run["name"]],
-        ["环境", run["env"]], ["状态", "已完成" if run["status"] == "done" else "进行中"],
+        ["环境", run["env"]], ["执行人", run.get("owner") or "—"],
+        ["状态", "已完成" if run["status"] == "done" else "进行中"],
         ["用例总数", run["total"]], ["已执行", executed],
         ["通过", run["passed"]], ["失败", run["failed"]],
         ["阻塞", run["blocked"]], ["跳过", run["skipped"]],
@@ -150,4 +152,11 @@ def run_report_workbook(run: dict, rows: list[dict]) -> bytes:
                [[r["case_id"], r["module"], r["title"], r["priority"],
                  r["result"], r["note"]] for r in issues],
                widths=[10, 12, 32, 8, 10, 40], pill_cols=(4, 5), wrap_cols=(6,))
+
+    links = defect_links or {}
+    _add_sheet(wb, "追溯矩阵",
+               ["用例ID", "模块", "标题", "优先级", "结果", "关联缺陷"],
+               [[r["case_id"], r["module"], r["title"], r["priority"], r["result"],
+                 "、".join(links.get(r["case_id"], [])) or "—"] for r in rows],
+               widths=[10, 12, 32, 8, 8, 34], pill_cols=(4, 5), wrap_cols=(3, 6))
     return _wb_bytes(wb)
