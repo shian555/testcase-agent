@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from excel_export import run_report_workbook
-from methods import METHODS
+from methods import ALL_METHODS, CASE_TYPES
 import store
 from styles import RESULT_COLORS, guide_steps, page_header, pill, result_styler
 
@@ -48,16 +48,18 @@ def _create_run_expander(runs: list[dict]) -> None:
             st.warning("用例库为空，先去「用例生成」采纳用例或新建手工用例。")
             return
 
-        f1, f2, f3, f4 = st.columns([2, 1.3, 1.2, 1])
+        f1, f2, f3, f4 = st.columns([2, 1.1, 1.1, 1])
         keyword = f1.text_input("🔍 筛选用例（标题/模块/标签）", key="mk_kw")
         sel_prio = f2.multiselect("优先级", ["P0", "P1", "P2"], key="mk_prio")
-        sel_method = f3.multiselect("方法", list(METHODS), key="mk_method")
+        sel_method = f3.multiselect("方法", list(ALL_METHODS), key="mk_method")
+        sel_type = f4.multiselect("类型", list(CASE_TYPES), key="mk_type")
         st.caption(f"用例库共 {len(pool)} 条 active 用例")
 
         picked = store.list_cases(keyword=keyword.strip(), priority=sel_prio or None,
-                                  method=sel_method or None)
+                                  method=sel_method or None, case_type=sel_type or None)
         rows = [{"选择": False, "ID": c["id"], "模块": c["module"], "标题": c["title"],
-                 "优先级": c["priority"], "方法": c["method"]} for c in picked]
+                 "类型": c["case_type"], "优先级": c["priority"], "方法": c["method"]}
+                for c in picked]
         df = pd.DataFrame(rows)
         sel = st.data_editor(df, key="mk_picker", hide_index=True, width="stretch", height=300,
                              column_config={
@@ -65,6 +67,7 @@ def _create_run_expander(runs: list[dict]) -> None:
                                  "ID": st.column_config.TextColumn("ID", disabled=True),
                                  "模块": st.column_config.TextColumn("模块", disabled=True),
                                  "标题": st.column_config.TextColumn("标题", disabled=True, width="medium"),
+                                 "类型": st.column_config.TextColumn("类型", disabled=True),
                                  "优先级": st.column_config.TextColumn("优先级", disabled=True),
                                  "方法": st.column_config.TextColumn("方法", disabled=True),
                              })

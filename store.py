@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS cases (
     steps         TEXT DEFAULT '',
     expected      TEXT DEFAULT '',
     priority      TEXT NOT NULL CHECK (priority IN ('P0','P1','P2')),
-    method        TEXT NOT NULL,             -- 等价类/边界值/场景法/错误猜测/手工
+    method        TEXT NOT NULL,             -- 等价类/边界值/场景法/错误猜测/手工…
+    case_type     TEXT NOT NULL DEFAULT '功能',  -- 功能/UI/接口/性能/安全/兼容
     testpoint_id  TEXT DEFAULT '',           -- 需求追溯：关联测试点
     batch_id      TEXT DEFAULT '',           -- 来源批次（source=ai 时）
     source        TEXT NOT NULL DEFAULT 'manual',   -- ai | manual
@@ -120,7 +121,8 @@ def _init_db() -> None:
 def _migrate(conn) -> None:
     """老库平滑升级：缺失列按默认值补齐（幂等，老数据不受影响）。"""
     for table, col, ddl in (("test_runs", "owner", "TEXT DEFAULT ''"),
-                            ("defects", "assignee", "TEXT DEFAULT ''")):
+                            ("defects", "assignee", "TEXT DEFAULT ''"),
+                            ("cases", "case_type", "TEXT DEFAULT '功能'")):
         cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
         if col not in cols:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
@@ -175,16 +177,17 @@ def add_case(*, module: str, title: str, priority: str, method: str,
              precondition: str = "", steps: str = "", expected: str = "",
              testpoint_id: str = "", source: str = "manual", tags: str = "",
              batch_id: str = "", review_score: int | None = None,
-             status: str = "active") -> str:
+             status: str = "active", case_type: str = "功能") -> str:
     now = _now()
     with _db() as conn:
         cid = _next_id(conn)
         conn.execute(
             "INSERT INTO cases(id, module, title, precondition, steps, expected, priority, method,"
-            " testpoint_id, batch_id, source, status, tags, review_score, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " case_type, testpoint_id, batch_id, source, status, tags, review_score,"
+            " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (cid, module, title, precondition, steps, expected, _norm_priority(priority),
-             method, testpoint_id, batch_id, source, status, tags, review_score, now, now))
+             method, case_type, testpoint_id, batch_id, source, status, tags,
+             review_score, now, now))
         _bump(conn)
     return cid
 
@@ -198,12 +201,13 @@ def add_cases(items: list[dict], *, source: str, batch_id: str = "") -> list[str
             cid = _next_id(conn)
             conn.execute(
                 "INSERT INTO cases(id, module, title, precondition, steps, expected, priority, method,"
-                " testpoint_id, batch_id, source, status, tags, review_score, created_at, updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " case_type, testpoint_id, batch_id, source, status, tags, review_score,"
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (cid, it.get("module", ""), it["title"], it.get("precondition", ""),
                  it.get("steps", ""), it.get("expected", ""), _norm_priority(it.get("priority")),
-                 it.get("method", ""), it.get("testpoint_id", ""), batch_id, source,
-                 "active", it.get("tags", ""), it.get("review_score"), now, now))
+                 it.get("method", ""), it.get("case_type", "功能"), it.get("testpoint_id", ""),
+                 batch_id, source, "active", it.get("tags", ""), it.get("review_score"),
+                 now, now))
             ids.append(cid)
         _bump(conn)
     return ids
@@ -231,12 +235,12 @@ def adopt_batch(prd_text: str, mode: str, score: int | None, items: list[dict], 
             cid = _next_id(conn)
             conn.execute(
                 "INSERT INTO cases(id, module, title, precondition, steps, expected, priority, method,"
-                " testpoint_id, batch_id, source, status, tags, review_score, created_at, updated_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " case_type, testpoint_id, batch_id, source, status, tags, review_score,"
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (cid, it.get("module", ""), it["title"], it.get("precondition", ""),
                  it.get("steps", ""), it.get("expected", ""), _norm_priority(it.get("priority")),
-                 it.get("method", ""), it.get("testpoint_id", ""), batch_id, "ai",
-                 "active", it.get("tags", ""), score, now, now))
+                 it.get("method", ""), it.get("case_type", "功能"), it.get("testpoint_id", ""),
+                 batch_id, "ai", "active", it.get("tags", ""), score, now, now))
             ids.append(cid)
         conn.execute("UPDATE gen_batches SET case_count=? WHERE id=?", (len(ids), batch_id))
         _bump(conn)
@@ -245,6 +249,7 @@ def adopt_batch(prd_text: str, mode: str, score: int | None, items: list[dict], 
 
 def list_cases(*, keyword: str = "", module: str = "", method: list[str] | None = None,
                priority: list[str] | None = None, source: str | None = None,
+               case_type: list[str] | None = None,
                status: str = "active") -> list[dict]:
     """按条件查询用例；status='all' 查全部。返回按 id 倒序的 dict 列表。"""
     sql = "SELECT * FROM cases WHERE 1=1"
@@ -264,6 +269,9 @@ def list_cases(*, keyword: str = "", module: str = "", method: list[str] | None 
     if priority:
         sql += f" AND priority IN ({','.join('?' * len(priority))})"
         params += priority
+    if case_type:
+        sql += f" AND case_type IN ({','.join('?' * len(case_type))})"
+        params += case_type
     if source:
         sql += " AND source=?"
         params.append(source)
@@ -279,7 +287,7 @@ def get_case(case_id: str) -> dict | None:
 
 
 _CASE_FIELDS = {"title", "module", "precondition", "steps", "expected", "priority",
-                "method", "tags", "status", "testpoint_id"}
+                "method", "tags", "status", "testpoint_id", "case_type"}
 
 
 def update_case(case_id: str, **fields) -> None:
@@ -367,8 +375,8 @@ def run_cases(run_id: int) -> list[dict]:
     """执行明细：run_results ⋈ cases（执行页编辑 / 报告页统计共用）。"""
     with _db() as conn:
         return [dict(r) for r in conn.execute(
-            "SELECT rr.case_id, c.module, c.title, c.priority, c.method, c.precondition,"
-            " c.steps, c.expected, rr.result, rr.note"
+            "SELECT rr.case_id, c.module, c.title, c.priority, c.method, c.case_type,"
+            " c.precondition, c.steps, c.expected, rr.result, rr.note"
             " FROM run_results rr JOIN cases c ON c.id = rr.case_id"
             " WHERE rr.run_id=? ORDER BY rr.case_id", (run_id,))]
 
@@ -595,40 +603,56 @@ def seed_demo() -> None:
               "method": c.method, "testpoint_id": c.testpoint_id} for c in cases]
     _, login_ids = adopt_batch(prd_text, "mock", review.score, items, dedup=True)
 
-    # 手工补充 注册 / 购物车 两模块（模拟从 Excel 导入的存量用例）
+    # 手工补充 注册 / 购物车 两模块（模拟从 Excel 导入的存量用例），并覆盖 UI/接口/安全/性能/兼容 类型
     manual = [
         {"module": "用户注册", "title": "手机号注册成功并收到验证码", "priority": "P0",
-         "method": "场景法", "tags": "冒烟", "precondition": "手机号未注册",
+         "method": "场景法", "tags": "冒烟", "case_type": "UI", "precondition": "手机号未注册",
          "steps": "1. 输入未注册手机号\n2. 点击获取验证码\n3. 填写验证码与密码并提交",
          "expected": "注册成功，跳转至首页"},
         {"module": "用户注册", "title": "已注册手机号重复注册给出引导", "priority": "P1",
-         "method": "等价类", "precondition": "手机号已注册",
+         "method": "等价类", "case_type": "UI", "precondition": "手机号已注册",
          "steps": "1. 输入已注册手机号\n2. 点击获取验证码",
          "expected": "提示「该手机号已注册」，引导去登录"},
         {"module": "用户注册", "title": "弱密码强度校验", "priority": "P2",
-         "method": "边界值",
+         "method": "边界值", "case_type": "UI",
          "steps": "1. 输入 7 位纯数字密码\n2. 提交注册",
          "expected": "提示密码强度不足，要求字母+数字组合"},
         {"module": "用户注册", "title": "验证码有效期 5 分钟", "priority": "P2",
-         "method": "场景法",
+         "method": "场景法", "case_type": "功能",
          "steps": "1. 获取验证码\n2. 等待 6 分钟后填写提交",
          "expected": "提示验证码已过期，可重新获取"},
         {"module": "购物车", "title": "加入购物车后角标数量同步", "priority": "P0",
-         "method": "场景法", "tags": "冒烟", "precondition": "已登录，角标为 0",
+         "method": "场景法", "tags": "冒烟", "case_type": "UI", "precondition": "已登录，角标为 0",
          "steps": "1. 商品详情页点击「加入购物车」\n2. 观察底部导航角标",
          "expected": "角标数量 +1，与购物车内件数一致"},
         {"module": "购物车", "title": "删除商品后合计金额重算", "priority": "P1",
-         "method": "场景法", "precondition": "购物车内含 2 件商品",
+         "method": "场景法", "case_type": "UI", "precondition": "购物车内含 2 件商品",
          "steps": "1. 左滑删除其中 1 件\n2. 查看合计金额",
          "expected": "合计金额同步减少，角标 -1"},
         {"module": "购物车", "title": "单商品购买数量上限 99 件", "priority": "P2",
-         "method": "边界值",
+         "method": "边界值", "case_type": "功能",
          "steps": "1. 数量步进调至 99 与 100\n2. 观察提交结果",
          "expected": "99 正常保存；100 提示超出单商品上限"},
         {"module": "购物车", "title": "下架商品不参与结算", "priority": "P1",
-         "method": "错误猜测", "precondition": "购物车内含 1 件已下架商品",
+         "method": "错误猜测", "case_type": "功能", "precondition": "购物车内含 1 件已下架商品",
          "steps": "1. 全选商品点击结算\n2. 查看订单明细",
          "expected": "下架商品被自动剔除并提示，仅结算有效商品"},
+        {"module": "用户登录", "title": "登录接口错误密码返回 401 与提示文案", "priority": "P1",
+         "method": "场景法", "case_type": "接口",
+         "steps": "1. POST /api/login 传入正确用户名与错误密码\n2. 检查响应码与响应体",
+         "expected": "HTTP 401；响应体含「用户名或密码错误」，不泄露具体是哪一项错"},
+        {"module": "用户注册", "title": "注册接口手机号参数注入特殊字符被拦截", "priority": "P1",
+         "method": "错误猜测", "case_type": "安全",
+         "steps": "1. POST /api/register 手机号传 \"' OR '1'='1\" 等注入串\n2. 检查响应与数据库",
+         "expected": "参数校验拦截并返回参数错误；无 SQL 异常、无脏数据落库"},
+        {"module": "用户登录", "title": "登录接口 100 并发下平均响应 < 2s", "priority": "P2",
+         "method": "场景法", "case_type": "性能",
+         "steps": "1. 压测工具模拟 100 并发登录持续 5 分钟\n2. 统计响应时间与错误率",
+         "expected": "平均响应 < 2s、P95 < 3s；错误率 < 0.1%，无连接泄漏"},
+        {"module": "用户注册", "title": "注册页主流浏览器渲染与操作一致", "priority": "P2",
+         "method": "场景法", "case_type": "兼容",
+         "steps": "1. Chrome / Safari / 微信内置浏览器打开注册页\n2. 对比布局并完成一次注册",
+         "expected": "三个端布局一致，验证码图片与按钮均可正常操作"},
     ]
     existing = {(c["module"], c["title"]) for c in list_cases()}
     fresh_manual = [m for m in manual if (m["module"], m["title"]) not in existing]

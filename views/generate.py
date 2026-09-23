@@ -10,7 +10,7 @@ import streamlit as st
 from agents import (LLMAnalyzerAgent, LLMGeneratorAgent, LLMReviewerAgent,
                     MockAnalyzerAgent, MockGeneratorAgent, MockReviewerAgent)
 from excel_export import generation_workbook
-from methods import METHODS
+from methods import ALL_METHODS, CASE_TYPES, METHODS
 from pipeline import cases_csv, report_markdown
 import store
 from styles import guide_steps, page_header, priority_styler
@@ -35,9 +35,14 @@ def render() -> None:
     guide_steps(["粘贴 PRD 文档", "点击「开始生成」", "评审后勾选采纳入库", "导出报告归档"])
 
     with st.expander("📐 注入的测试方法论", expanded=False):
-        st.markdown("　".join(f"**{m}**" for m in METHODS))
+        st.markdown("　".join(f"**{m}**" for m in ALL_METHODS))
         for m, desc in METHODS.items():
             st.markdown(f"- **{m}**：{desc}")
+        st.caption("流水线自动运用以上四种核心方法；以下方法供手工设计与用例标注补充：")
+        for m, desc in ALL_METHODS.items():
+            if m not in METHODS:
+                st.markdown(f"- **{m}**：{desc}")
+        st.caption(f"用例类型标记验证层面：{' / '.join(CASE_TYPES)}（与设计方法正交）。")
 
     left, right = st.columns([2, 3], gap="medium")
 
@@ -166,8 +171,8 @@ def _adopt_tab(cases, review) -> None:
     if "adopt_df" not in st.session_state:
         st.session_state.adopt_df = pd.DataFrame([{
             "采纳": False, "ID": c.id, "模块": c.module, "标题": c.title,
-            "优先级": c.priority, "方法": c.method, "前置条件": c.precondition,
-            "步骤": c.steps, "预期结果": c.expected,
+            "类型": "功能", "优先级": c.priority, "方法": c.method,
+            "前置条件": c.precondition, "步骤": c.steps, "预期结果": c.expected,
         } for c in cases])
 
     q1, q2, q3, q4 = st.columns(4)
@@ -197,6 +202,8 @@ def _adopt_tab(cases, review) -> None:
             "ID": st.column_config.TextColumn("ID", disabled=True),
             "方法": st.column_config.TextColumn("方法", disabled=True, width="medium"),
             "标题": st.column_config.TextColumn("标题", width="medium"),
+            "类型": st.column_config.SelectboxColumn("类型", options=list(CASE_TYPES),
+                                                     required=True, help="标记验证层面，可逐行修改"),
             "优先级": st.column_config.SelectboxColumn("优先级", options=["P0", "P1", "P2"],
                                                        required=True),
             "前置条件": st.column_config.TextColumn("前置条件", width="large"),
@@ -210,7 +217,8 @@ def _adopt_tab(cases, review) -> None:
     if st.session_state.adopt_submit:
         mode = st.session_state.get("mode", "mock")
         items = [{"module": r["模块"], "title": r["标题"], "priority": r["优先级"],
-                  "method": r["方法"], "precondition": r["前置条件"], "steps": r["步骤"],
+                  "method": r["方法"], "case_type": r["类型"],
+                  "precondition": r["前置条件"], "steps": r["步骤"],
                   "expected": r["预期结果"], "testpoint_id": ""} for _, r in ed[ed["采纳"]].iterrows()]
         batch_id, ids = store.adopt_batch(st.session_state.get("prd_text", ""), mode,
                                           review.score, items, dedup=dedup)

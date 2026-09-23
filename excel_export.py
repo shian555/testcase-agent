@@ -24,7 +24,9 @@ _PILL = {"P0": ("FEE2E2", "B91C1C"), "P1": ("FEF3C7", "B45309"), "P2": ("E2E8F0"
          "通过": ("DCFCE7", "15803D"), "失败": ("FEE2E2", "B91C1C"),
          "阻塞": ("FEF3C7", "B45309"), "跳过": ("E2E8F0", "475569"),
          "未执行": ("F8FAFC", "94A3B8"), "AI": ("DBEAFE", "1E40AF"), "手工": ("E2E8F0", "475569"),
-         "启用": ("DCFCE7", "15803D"), "停用": ("FEE2E2", "B91C1C")}
+         "启用": ("DCFCE7", "15803D"), "停用": ("FEE2E2", "B91C1C"),
+         "功能": ("E2E8F0", "475569"), "UI": ("DBEAFE", "1E40AF"), "接口": ("D1FAE5", "047857"),
+         "性能": ("FEF3C7", "B45309"), "安全": ("FEE2E2", "B91C1C"), "兼容": ("EDE9FE", "6D28D9")}
 
 
 def _add_sheet(wb: Workbook, title: str, headers: list[str], rows: list[list],
@@ -87,19 +89,20 @@ def generation_workbook(points, cases, review) -> bytes:
 
 
 def library_workbook(cases: list[dict]) -> bytes:
-    """用例库导出：含来源 / 状态 / 标签 / 追溯全列。"""
+    """用例库导出：含类型 / 来源 / 状态 / 标签 / 追溯全列（与导入模板同格式）。"""
     wb = Workbook()
     wb.remove(wb.active)
     _add_sheet(wb, "用例库",
-               ["ID", "模块", "标题", "方法", "优先级", "来源", "状态", "标签",
+               ["ID", "模块", "标题", "类型", "方法", "优先级", "来源", "状态", "标签",
                 "前置条件", "步骤", "预期结果", "测试点", "创建时间"],
-               [[c["id"], c["module"], c["title"], c["method"], c["priority"],
+               [[c["id"], c["module"], c["title"], c.get("case_type", "功能"),
+                 c["method"], c["priority"],
                  "AI" if c["source"] == "ai" else "手工",
                  "启用" if c["status"] == "active" else "停用",
                  c["tags"], c["precondition"], c["steps"], c["expected"],
                  c["testpoint_id"], c["created_at"]] for c in cases],
-               widths=[10, 12, 32, 10, 8, 8, 8, 12, 26, 45, 32, 12, 20],
-               pill_cols=(5, 6, 7), wrap_cols=(9, 10, 11))
+               widths=[10, 12, 32, 8, 10, 8, 8, 8, 12, 26, 45, 32, 12, 20],
+               pill_cols=(4, 6, 7, 8), wrap_cols=(11, 12, 13))
     return _wb_bytes(wb)
 
 
@@ -141,10 +144,10 @@ def run_report_workbook(run: dict, rows: list[dict],
     _add_sheet(wb, "执行汇总", ["项目", "内容"], summary, widths=[22, 70], wrap_cols=(2,))
 
     _add_sheet(wb, "执行明细",
-               ["用例ID", "模块", "标题", "优先级", "方法", "结果", "备注"],
-               [[r["case_id"], r["module"], r["title"], r["priority"], r["method"],
-                 r["result"], r["note"]] for r in rows],
-               widths=[10, 12, 32, 8, 10, 8, 30], pill_cols=(4, 6), wrap_cols=(7,))
+               ["用例ID", "模块", "标题", "类型", "优先级", "方法", "结果", "备注"],
+               [[r["case_id"], r["module"], r["title"], r.get("case_type", "功能"),
+                 r["priority"], r["method"], r["result"], r["note"]] for r in rows],
+               widths=[10, 12, 32, 8, 8, 10, 8, 30], pill_cols=(4, 5, 7), wrap_cols=(6, 8))
 
     issues = [r for r in rows if r["result"] in ("失败", "阻塞")]
     _add_sheet(wb, "问题清单",

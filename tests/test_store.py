@@ -28,14 +28,18 @@ def test_case_crud(tmp_db):
     cid = _case()
     got = store.get_case(cid)
     assert got["title"] == "登录成功" and got["source"] == "manual"
+    assert got["case_type"] == "功能"  # 缺省类型
 
-    store.update_case(cid, title="登录成功（改）", priority="P1", tags="冒烟")
+    store.update_case(cid, title="登录成功（改）", priority="P1", tags="冒烟",
+                      case_type="接口")
     got = store.get_case(cid)
     assert got["title"] == "登录成功（改）" and got["priority"] == "P1" and got["tags"] == "冒烟"
+    assert got["case_type"] == "接口"
 
     assert len(store.list_cases()) == 1
     assert store.list_cases(keyword="改") and not store.list_cases(keyword="不存在")
     assert store.list_cases(priority=["P1"]) and not store.list_cases(priority=["P2"])
+    assert store.list_cases(case_type=["接口"]) and not store.list_cases(case_type=["UI"])
 
     store.set_case_status([cid], "deprecated")
     assert not store.list_cases() and store.list_cases(status="all")
@@ -54,7 +58,7 @@ def test_ids_monotonic_never_reused(tmp_db):
 
 def test_adopt_batch_and_dedup(tmp_db):
     items = [{"module": "登录", "title": "空密码登录", "priority": "P1",
-              "method": "等价类", "testpoint_id": "TP001"},
+              "method": "等价类", "case_type": "接口", "testpoint_id": "TP001"},
              {"module": "登录", "title": "超长密码", "priority": "P2",
               "method": "边界值", "testpoint_id": "TP002"}]
     batch_id, ids = store.adopt_batch("PRD...", "mock", 100, items)
@@ -62,6 +66,7 @@ def test_adopt_batch_and_dedup(tmp_db):
     case = store.get_case(ids[0])
     assert case["source"] == "ai" and case["batch_id"] == batch_id
     assert case["review_score"] == 100 and case["testpoint_id"] == "TP001"
+    assert case["case_type"] == "接口"  # 采纳时可携带类型入库
 
     _, ids2 = store.adopt_batch("PRD...", "mock", 100, items, dedup=True)
     assert ids2 == []  # 同模块同名被去重
@@ -109,6 +114,8 @@ def test_seed_demo_and_clear(tmp_db):
     store.seed_demo()  # 幂等：重复填充不产生重复数据
     cases = store.list_cases()
     assert len(cases) > 0 and {c["source"] for c in cases} == {"ai", "manual"}
+    # 类型覆盖：演示数据含 功能/UI/接口/安全/性能/兼容 全类型
+    assert {"功能", "UI", "接口", "安全", "性能", "兼容"} <= {c["case_type"] for c in cases}
 
     runs = store.list_runs()
     assert len(runs) == 3 and sum(r["status"] == "done" for r in runs) == 2

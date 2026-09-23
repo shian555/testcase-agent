@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from excel_export import library_workbook
-from methods import METHODS
+from methods import ALL_METHODS, CASE_TYPES
 import store
 from styles import (DANGER, PRIMARY, guide_steps, kpi_card, page_header,
                     priority_styler)
@@ -46,7 +46,7 @@ def render() -> None:
 
 
 def _asset_overview() -> None:
-    """资产概览：启用 / P0 / AI / 手工 / 停用 五张小指标卡。"""
+    """资产概览：五张小指标卡 + 各类型用例数 chips。"""
     all_cases = store.list_cases(status="all")
     active = [c for c in all_cases if c["status"] == "active"]
     stats = [("用例总数（启用）", len(active), PRIMARY),
@@ -59,28 +59,41 @@ def _asset_overview() -> None:
         with col:
             kpi_card(label, value, accent=accent)
 
+    counts: dict[str, int] = {}
+    for c in active:
+        counts[c["case_type"]] = counts.get(c["case_type"], 0) + 1
+    chips = "".join(
+        f'<span class="pill" style="background:#EFF6FF;color:#1D4ED8">{t} {counts.get(t, 0)}</span>'
+        for t in CASE_TYPES if counts.get(t))
+    if chips:
+        st.markdown(f'<div style="display:flex;gap:.45rem;flex-wrap:wrap;margin:.2rem 0 .4rem">'
+                    f'{chips}</div>', unsafe_allow_html=True)
+
 
 def _toolbar_and_query() -> list[dict]:
     """筛选工具栏 → store 查询。"""
-    f1, f2, f3, f4, f5 = st.columns([2, 1.4, 1.2, 1, 1])
+    f1, f2, f3, f4, f5, f6 = st.columns([2, 1.2, 1, 1, 1, 1])
     keyword = f1.text_input("🔍 关键字（标题/模块/标签）", key="lib_kw")
-    sel_method = f2.multiselect("方法", list(METHODS), key="lib_method")
-    sel_prio = f3.multiselect("优先级", ["P0", "P1", "P2"], key="lib_prio")
-    source = f4.selectbox("来源", ["全部", "AI", "手工"], key="lib_source")
-    status = f5.selectbox("状态", ["启用", "停用", "全部"], key="lib_status")
+    sel_method = f2.multiselect("方法", list(ALL_METHODS), key="lib_method")
+    sel_type = f3.multiselect("类型", list(CASE_TYPES), key="lib_type")
+    sel_prio = f4.multiselect("优先级", ["P0", "P1", "P2"], key="lib_prio")
+    source = f5.selectbox("来源", ["全部", "AI", "手工"], key="lib_source")
+    status = f6.selectbox("状态", ["启用", "停用", "全部"], key="lib_status")
 
     return store.list_cases(
         keyword=keyword.strip(),
         method=sel_method or None,
         priority=sel_prio or None,
+        case_type=sel_type or None,
         source={"全部": None, "AI": "ai", "手工": "manual"}[source],
         status={"启用": "active", "停用": "deprecated", "全部": "all"}[status])
 
 
 def _case_table(cases: list[dict]) -> list[str]:
     """主表格（多选行）→ 返回选中的用例 ID。"""
-    rows = [{"ID": c["id"], "模块": c["module"], "标题": c["title"], "方法": c["method"],
-             "优先级": c["priority"], "来源": "AI" if c["source"] == "ai" else "手工",
+    rows = [{"ID": c["id"], "模块": c["module"], "标题": c["title"], "类型": c["case_type"],
+             "方法": c["method"], "优先级": c["priority"],
+             "来源": "AI" if c["source"] == "ai" else "手工",
              "标签": c["tags"], "状态": "启用" if c["status"] == "active" else "停用"}
             for c in cases]
     df = pd.DataFrame(rows)
@@ -153,19 +166,21 @@ def _case_detail(cases: list[dict]) -> None:
                 t1, t2 = st.columns(2)
                 title = t1.text_input("标题", value=case["title"])
                 module = t2.text_input("模块", value=case["module"])
-                t3, t4, t5 = st.columns(3)
+                t3, t4, t5, t6 = st.columns(4)
                 priority = t3.selectbox("优先级", ["P0", "P1", "P2"],
                                         index=["P0", "P1", "P2"].index(case["priority"]))
-                method = t4.selectbox("方法", list(METHODS) + ["手工"],
-                                      index=(list(METHODS) + ["手工"]).index(case["method"]))
-                tags = t5.text_input("标签（逗号分隔）", value=case["tags"])
+                method = t4.selectbox("方法", list(ALL_METHODS) + ["手工"],
+                                      index=(list(ALL_METHODS) + ["手工"]).index(case["method"]))
+                case_type = t5.selectbox("类型", list(CASE_TYPES),
+                                         index=list(CASE_TYPES).index(case["case_type"]))
+                tags = t6.text_input("标签（逗号分隔）", value=case["tags"])
                 precondition = st.text_area("前置条件", value=case["precondition"])
                 steps = st.text_area("步骤（每行一步）", value=case["steps"], height=140)
                 expected = st.text_area("预期结果", value=case["expected"], height=90)
                 if st.form_submit_button("💾 保存修改", type="primary", use_container_width=True):
                     store.update_case(case["id"], title=title, module=module, priority=priority,
-                                      method=method, tags=tags.strip(), precondition=precondition,
-                                      steps=steps, expected=expected)
+                                      method=method, case_type=case_type, tags=tags.strip(),
+                                      precondition=precondition, steps=steps, expected=expected)
                     st.toast(f"{case['id']} 已保存")
                     st.rerun()
 
@@ -176,10 +191,11 @@ def _new_case_expander() -> None:
             t1, t2 = st.columns(2)
             title = t1.text_input("标题*", placeholder="如：验证验证码为空时的登录提示")
             module = t2.text_input("模块*", placeholder="如：登录")
-            t3, t4, t5 = st.columns(3)
+            t3, t4, t5, t6 = st.columns(4)
             priority = t3.selectbox("优先级", ["P0", "P1", "P2"], index=1)
-            method = t4.selectbox("方法", ["手工"] + list(METHODS))
-            tags = t5.text_input("标签（逗号分隔）")
+            method = t4.selectbox("方法", ["手工"] + list(ALL_METHODS))
+            case_type = t5.selectbox("类型", list(CASE_TYPES))
+            tags = t6.text_input("标签（逗号分隔）")
             precondition = st.text_area("前置条件", placeholder="如：已打开登录页")
             steps = st.text_area("步骤（每行一步）", placeholder="1. …\n2. …")
             expected = st.text_area("预期结果", placeholder="如：登录成功，跳转首页")
@@ -189,7 +205,7 @@ def _new_case_expander() -> None:
                 st.error("标题与模块为必填项")
             else:
                 cid = store.add_case(module=module.strip(), title=title.strip(),
-                                     priority=priority, method=method,
+                                     priority=priority, method=method, case_type=case_type,
                                      precondition=precondition, steps=steps,
                                      expected=expected, tags=tags.strip())
                 st.toast(f"手工用例 {cid} 已创建")
@@ -198,9 +214,9 @@ def _new_case_expander() -> None:
 
 # ---------------- Excel 批量导入 ----------------
 
-_IMPORT_COLS = {"模块": "module", "标题": "title", "优先级": "priority", "方法": "method",
-                "前置条件": "precondition", "步骤": "steps", "预期结果": "expected",
-                "标签": "tags"}
+_IMPORT_COLS = {"模块": "module", "标题": "title", "类型": "case_type", "优先级": "priority",
+                "方法": "method", "前置条件": "precondition", "步骤": "steps",
+                "预期结果": "expected", "标签": "tags"}
 
 
 def _parse_import(upload) -> list[dict]:
@@ -225,6 +241,8 @@ def _parse_import(upload) -> list[dict]:
         if rec.get("title") and rec.get("module"):
             rec.setdefault("priority", "P2")
             rec.setdefault("method", "手工")
+            if not rec.get("case_type"):
+                rec["case_type"] = "功能"
             items.append(rec)
     return items
 
@@ -250,6 +268,7 @@ def _import_expander() -> None:
             return
 
         df = pd.DataFrame([{"导入": True, "模块": it["module"], "标题": it["title"],
+                            "类型": it.get("case_type", "功能"),
                             "优先级": it.get("priority", "P2"), "方法": it.get("method", "手工"),
                             "前置条件": it.get("precondition", ""), "步骤": it.get("steps", ""),
                             "预期结果": it.get("expected", ""), "标签": it.get("tags", "")}
@@ -262,6 +281,8 @@ def _import_expander() -> None:
                                 "模块": st.column_config.TextColumn("模块", disabled=True),
                                 "标题": st.column_config.TextColumn("标题", disabled=True,
                                                                     width="medium"),
+                                "类型": st.column_config.SelectboxColumn(
+                                    "类型", options=list(CASE_TYPES), required=True),
                                 "优先级": st.column_config.SelectboxColumn(
                                     "优先级", options=["P0", "P1", "P2"], required=True),
                                 "前置条件": st.column_config.TextColumn("前置条件", width="large",
@@ -276,6 +297,7 @@ def _import_expander() -> None:
                      disabled=n == 0, use_container_width=True, key="import_submit"):
             chosen = [{"module": r["模块"], "title": r["标题"], "priority": r["优先级"],
                        "method": r["方法"] if r["方法"] else "手工",
+                       "case_type": r["类型"] if r["类型"] else "功能",
                        "precondition": r["前置条件"], "steps": r["步骤"],
                        "expected": r["预期结果"], "tags": r["标签"]}
                       for _, r in ed[ed["导入"]].iterrows()]

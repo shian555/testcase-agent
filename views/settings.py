@@ -5,7 +5,7 @@ import os
 
 import streamlit as st
 
-from methods import METHODS
+from methods import ALL_METHODS, CASE_TYPES, METHODS
 import store
 from styles import page_header
 
@@ -22,6 +22,12 @@ def render() -> None:
     with st.expander("📐 注入的测试方法论"):
         for m, desc in METHODS.items():
             st.markdown(f"- **{m}**：{desc}")
+        st.caption("以下方法用于手工设计与用例标注（AI 流水线当前聚焦核心四法）：")
+        for m, desc in ALL_METHODS.items():
+            if m not in METHODS:
+                st.markdown(f"- **{m}**：{desc}")
+        st.caption(f"用例类型标记验证层面：{' / '.join(CASE_TYPES)}，"
+                   "与设计方法正交——接口用例同样可以用等价类/边界值设计。")
 
     with st.expander("ℹ️ 关于本平台"):
         st.markdown(
