@@ -1,11 +1,11 @@
 # AI 智能测试平台（testcase-agent）
 
 [![CI](https://github.com/shian555/testcase-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/shian555/testcase-agent/actions/workflows/ci.yml)
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_red.svg)](https://testcase-agent.streamlit.app)
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_red.svg)](https://testcase-agent-4aianoccc3kfppq7rxmp5d.streamlit.app)
 
 基于 LLM 多 Agent 的测试用例平台：不止"生成"，而是覆盖 **用例生成 → 采纳入库 → 用例库 → 测试执行 → 质量报告 → 缺陷跟踪** 的完整业务闭环，对标 TestRail / PingCode / 禅道的企业级测试管理流程。
 
-> **🌐 在线 Demo（免安装，点开即用）**：[https://testcase-agent.streamlit.app](https://testcase-agent.streamlit.app)
+> **🌐 在线 Demo（免安装，点开即用）**：[https://testcase-agent-4aianoccc3kfppq7rxmp5d.streamlit.app](https://testcase-agent-4aianoccc3kfppq7rxmp5d.streamlit.app)
 
 > 一个项目同时证明：**测试平台设计能力**（测试用例设计方法论 + 测试管理闭环，测开岗）+ **多 Agent 协同 / LLM 工程化**（AI 应用开发岗）。
 
